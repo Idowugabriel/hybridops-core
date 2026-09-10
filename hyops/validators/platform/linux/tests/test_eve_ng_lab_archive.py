@@ -77,6 +77,23 @@ class EveNgLabArchiveValidatorTests(unittest.TestCase):
         inputs["eveng_lab_archive_capture_device_configs"] = True
         validate(inputs)
 
+    def test_saved_configuration_export_timeout_accepts_bounded_override(
+        self,
+    ) -> None:
+        inputs = valid_inputs()
+        inputs["eveng_lab_archive_config_export_timeout_s"] = 600
+        validate(inputs)
+
+    def test_saved_configuration_export_timeout_is_bounded(self) -> None:
+        for value in (True, 0, 3601):
+            with self.subTest(value=value):
+                inputs = valid_inputs()
+                inputs["eveng_lab_archive_config_export_timeout_s"] = value
+                with self.assertRaisesRegex(
+                    ValueError, "must be between 1 and 3600"
+                ):
+                    validate(inputs)
+
     def test_saved_configuration_capture_is_rejected_for_restore(self) -> None:
         inputs = valid_inputs()
         inputs.update(

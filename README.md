@@ -61,6 +61,7 @@ HybridOps is exercised through complete platform paths rather than isolated conf
 - **[Authoritative on-prem foundation](https://docs.hybridops.tech/reference-scenarios/authoritative-onprem-foundation/):** source-of-truth network and platform foundation
 - **[PostgreSQL HA recovery cycle](https://docs.hybridops.tech/reference-scenarios/postgresql-ha-dr-cycle/):** backup continuity, failover, failback, and controlled cutover
 - **[Kubernetes HA platform foundation](https://docs.hybridops.tech/reference-scenarios/gitops-kubernetes-foundation/):** highly available cluster foundation with GitOps delivery
+- **[Network lab continuity](https://docs.hybridops.tech/reference-scenarios/network-lab-continuity/):** verified intake, private access, preservation and reconstruction for EVE-NG, GNS3 and Containerlab
 
 See the full [reference scenario library](https://docs.hybridops.tech/reference-scenarios/).
 

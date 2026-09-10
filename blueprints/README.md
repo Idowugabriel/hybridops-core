@@ -150,7 +150,8 @@ runbook.
 
 Existing EVE-NG, GNS3 and Containerlab labs can be inspected and staged before
 a new HybridOps-managed host is deployed. Migration remains within the same
-lab platform. The source host is not modified.
+lab platform. Capture does not rewrite source lab data. An operator-selected
+EVE-NG quiescence action may shut down guests and stop nodes before capture.
 
 For EVE-NG and GNS3, save intended device configurations and stop the source
 nodes before capture:

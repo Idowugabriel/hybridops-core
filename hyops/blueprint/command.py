@@ -2923,13 +2923,34 @@ def _ssh_access_trust_options(
     return options
 
 
-def _ssh_access_error(stderr: str, known_hosts_file: Path) -> str:
+def _ssh_access_error(
+    stderr: str,
+    known_hosts_file: Path,
+    *,
+    ssh_target: str = "",
+    uses_dhcp: bool = False,
+) -> str:
     detail = str(stderr or "").strip()
     if "REMOTE HOST IDENTIFICATION HAS CHANGED" in detail or "Host key verification failed" in detail:
         return (
             "SSH host identity changed unexpectedly for the current VM state; access was stopped. "
             f"Review the deployed VM and its scoped trust record: {known_hosts_file}. "
             "If the VM was intentionally rebuilt, rerun the blueprint deploy so access uses the new VM state."
+        )
+    unreachable_markers = (
+        "Connection timed out",
+        "Operation timed out",
+        "No route to host",
+        "Connection refused",
+    )
+    if any(marker in detail for marker in unreachable_markers):
+        target = ssh_target or "the recorded VM address"
+        message = f"SSH access is unavailable at {target}."
+        if uses_dhcp:
+            message += " The VM uses DHCP, so its recorded address may be stale."
+        return (
+            f"{message} Confirm the current address and SSH service, refresh the "
+            "platform VM state, then retry."
         )
     return detail or "SSH connection failed"
 
@@ -3487,21 +3508,44 @@ def run_access(ns) -> int:
                 "BatchMode=yes",
                 "-o",
                 "IdentitiesOnly=yes",
+                "-o",
+                "ConnectTimeout=8",
                 *_ssh_access_trust_options(known_hosts_file),
                 "-i",
                 str(ssh_key),
             ]
-            identity_check = subprocess.run(
-                [*ssh_base, ssh_target, "true"],
-                cwd=str(Path.home()),
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=20,
-                check=False,
+            uses_dhcp = (
+                str(vm.get("ipv4_configured_primary") or "").strip().lower()
+                == "dhcp"
             )
+            try:
+                identity_check = subprocess.run(
+                    [*ssh_base, ssh_target, "true"],
+                    cwd=str(Path.home()),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=20,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                raise ValueError(
+                    _ssh_access_error(
+                        "Connection timed out",
+                        known_hosts_file,
+                        ssh_target=ssh_target,
+                        uses_dhcp=uses_dhcp,
+                    )
+                ) from None
             if identity_check.returncode != 0:
-                raise ValueError(_ssh_access_error(identity_check.stderr, known_hosts_file))
+                raise ValueError(
+                    _ssh_access_error(
+                        identity_check.stderr,
+                        known_hosts_file,
+                        ssh_target=ssh_target,
+                        uses_dhcp=uses_dhcp,
+                    )
+                )
             native_console_mode = _native_console_mode(
                 access,
                 bool(getattr(ns, "native_consoles", False)),
@@ -4221,6 +4265,64 @@ def _lab_restore_phase(line: str) -> str:
     if "publish" in lowered or "restart" in lowered:
         return "finalising"
     return ""
+
+
+def _lab_archive_phase(line: str) -> str:
+    match = _ANSIBLE_TASK_LINE.match(str(line or "").strip())
+    if match is None:
+        return ""
+    task = " ".join(match.group("task").split())
+    lowered = task.lower()
+
+    if "quiescence" in lowered or "stopped eve-ng qemu" in lowered:
+        return "checking guest shutdown"
+    if (
+        "native configuration export" in lowered
+        or "saved configuration" in lowered
+    ):
+        return "exporting saved configurations"
+    if "node-state" in lowered or "node state" in lowered or "qemu overlay" in lowered:
+        if "build" in lowered:
+            return "packing node state"
+        if "fetch" in lowered:
+            return "transferring node state"
+        if any(
+            term in lowered
+            for term in (
+                "inspect",
+                "check",
+                "require",
+                "find",
+                "select",
+                "validate",
+            )
+        ):
+            return "checking node state"
+        if "verify" in lowered or "checksum" in lowered:
+            return "verifying node state"
+    if "build" in lowered and "lab archive" in lowered:
+        return "packing lab data"
+    if "fetch" in lowered and "lab archive" in lowered:
+        return "transferring lab data"
+    if "lab archive" in lowered and any(
+        term in lowered for term in ("verify", "checksum", "inspect", "require")
+    ):
+        return "verifying lab archive"
+    if "promote" in lowered or "fallback generation" in lowered:
+        return "promoting verified archive"
+    return ""
+
+
+def _concise_archive_size(value: int) -> str:
+    size = max(0, int(value))
+    for unit, divisor in (
+        ("GiB", 1024**3),
+        ("MiB", 1024**2),
+        ("KiB", 1024),
+    ):
+        if size >= divisor:
+            return f"{size / divisor:.1f} {unit}"
+    return f"{size} bytes"
 
 
 def _run_lab_restore(
@@ -5085,8 +5187,24 @@ def _run_archive_before_destroy(ns, payload: dict[str, Any], paths) -> int:
     previous_child = os.environ.get("HYOPS_PROGRESS_CHILD")
     if not os.getenv("HYOPS_VERBOSE"):
         os.environ["HYOPS_PROGRESS_CHILD"] = "1"
+
+    config_export_timeout = int(
+        archive_inputs.get("eveng_lab_archive_config_export_timeout_s", 0) or 0
+    )
+
+    def update_archive_progress(stream: str, line: str) -> None:
+        if stream != "stdout":
+            return
+        phase = _lab_archive_phase(line)
+        if not phase:
+            return
+        if phase == "exporting saved configurations" and config_export_timeout:
+            phase += f" (limit {config_export_timeout}s per lab)"
+        progress.update(archive_step["id"], f"Lab archive: {phase}")
+
     try:
-        rc = run_step_module_command(archive_step, payload, ns, paths)
+        with observe_stream_output(update_archive_progress):
+            rc = run_step_module_command(archive_step, payload, ns, paths)
     except KeyboardInterrupt:
         rc = CANCELLED
     finally:
@@ -5094,21 +5212,27 @@ def _run_archive_before_destroy(ns, payload: dict[str, Any], paths) -> int:
             os.environ.pop("HYOPS_PROGRESS_CHILD", None)
         else:
             os.environ["HYOPS_PROGRESS_CHILD"] = previous_child
-    archive_status = "cancelled" if int(rc) == CANCELLED else ("ok" if rc == 0 else "failed")
-    progress.finish(
-        archive_step["id"],
-        "Lab archive",
-        archive_status,
-        plain=f"lab_archive status={archive_status}",
-    )
     if int(rc) == CANCELLED:
+        progress.finish(
+            archive_step["id"],
+            "Lab archive",
+            "cancelled",
+            plain="lab_archive status=cancelled",
+        )
         print("Archive interrupted. Resources were retained.")
         print("Check lab state before continuing.")
         return CANCELLED
     if rc != 0:
+        progress.finish(
+            archive_step["id"],
+            "Lab archive",
+            "failed",
+            plain="lab_archive status=failed",
+        )
         print("ERR: lab export failed; no resources were destroyed")
         return int(rc)
 
+    progress.update(archive_step["id"], "Lab archive: verifying published archive")
     try:
         state = read_module_state(
             paths.state_dir,
@@ -5126,12 +5250,25 @@ def _run_archive_before_destroy(ns, payload: dict[str, Any], paths) -> int:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
     except (OSError, ValueError) as exc:
+        progress.finish(
+            archive_step["id"],
+            "Lab archive",
+            "failed",
+            plain="lab_archive status=failed",
+        )
         print(f"ERR: {exc}; no resources were destroyed")
         return OPERATOR_ERROR
     actual = digest.hexdigest()
     if actual != expected:
+        progress.finish(
+            archive_step["id"],
+            "Lab archive",
+            "failed",
+            plain="lab_archive status=failed",
+        )
         print("ERR: lab archive checksum verification failed; no resources were destroyed")
         return OPERATOR_ERROR
+    verified_bytes = archive_path.stat().st_size
     archive_contents = [contract["contents_label"]]
     if bool(outputs.get(contract["device_configs_captured_output"], False)):
         archive_contents.append("saved device configurations")
@@ -5146,6 +5283,12 @@ def _run_archive_before_destroy(ns, payload: dict[str, Any], paths) -> int:
         node_archive_path = Path(str(outputs.get(contract["node_path_output"]) or "")).expanduser()
         node_expected = str(outputs.get(contract["node_sha256_output"]) or "").strip().lower()
         if not node_archive_path.is_file() or not re.fullmatch(r"[0-9a-f]{64}", node_expected):
+            progress.finish(
+                archive_step["id"],
+                "Lab archive",
+                "failed",
+                plain="lab_archive status=failed",
+            )
             print("ERR: node-state archive is missing; no resources were destroyed")
             return OPERATOR_ERROR
         node_digest = hashlib.sha256()
@@ -5154,14 +5297,28 @@ def _run_archive_before_destroy(ns, payload: dict[str, Any], paths) -> int:
                 node_digest.update(chunk)
         node_actual = node_digest.hexdigest()
         if node_actual != node_expected:
+            progress.finish(
+                archive_step["id"],
+                "Lab archive",
+                "failed",
+                plain="lab_archive status=failed",
+            )
             print("ERR: node-state archive checksum verification failed; no resources were destroyed")
             return OPERATOR_ERROR
+        verified_bytes += node_archive_path.stat().st_size
         archive_contents.append("stopped node state")
         if verbose:
             print(f"stopped node state: {node_archive_path}")
             print(f"sha256: {node_actual}")
     elif contract["node_state"]:
         print("node state: no QEMU overlays found")
+    progress.finish(
+        archive_step["id"],
+        "Lab archive",
+        "ok",
+        plain="lab_archive status=ok",
+        detail=f"{_concise_archive_size(verified_bytes)} verified",
+    )
     print(f"archive saved: {', '.join(archive_contents)}")
     return 0
 

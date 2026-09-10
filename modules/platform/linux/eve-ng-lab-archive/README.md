@@ -59,9 +59,12 @@ To refresh saved device configurations before export, enable:
 load_vault_env: true
 required_env: ["EVENG_ADMIN_PASSWORD"]
 eveng_lab_archive_capture_device_configs: true
+eveng_lab_archive_config_export_timeout_s: 300
 ```
 
-Capture uses the EVE-NG API on the target host. Failure stops the archive step and leaves the execution host in place.
+Capture uses the EVE-NG API on the target host. The timeout accepts values from
+1 to 3600 seconds. Failure stops the archive step and leaves the execution host
+in place.
 
 ## Restore
 

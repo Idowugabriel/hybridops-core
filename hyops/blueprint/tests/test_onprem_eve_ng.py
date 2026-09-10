@@ -31,6 +31,9 @@ class OnPremEveNgBlueprintTest(TestCase):
         self.assertTrue(
             archive_inputs["eveng_lab_archive_capture_device_configs"]
         )
+        self.assertEqual(
+            archive_inputs["eveng_lab_archive_config_export_timeout_s"], 300
+        )
         self.assertEqual(len(validated["steps"]), 5)
         vm_step = next(
             step for step in validated["steps"] if step["id"] == "eve_ng_vm"

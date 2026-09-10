@@ -110,7 +110,8 @@ Base images remain separately managed during routine preservation. A verified mi
 A verified migration bundle can provide the initial archive state for an
 existing EVE-NG lab. Intake checks its lab definitions, archive paths, image
 references and optional QEMU overlay layout, then binds the retained copy to
-this blueprint. The source host remains unchanged.
+this blueprint. Capture does not rewrite the source lab data; a selected
+quiescence action may shut down guests and stop nodes first.
 
 Existing lab definitions and base images are protected independently. Replacement requires `--overwrite-labs` or `--overwrite-images` for the relevant content.
 
