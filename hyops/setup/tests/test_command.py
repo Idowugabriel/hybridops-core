@@ -362,6 +362,50 @@ class SetupCommandTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(f"hybridops.{collection}:0.1.10", invocation)
 
+    def test_forced_targeted_collection_install_clears_response_cache(self) -> None:
+        installer = REPO_ROOT / "tools" / "setup" / "setup-ansible.sh"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime"
+            bin_dir = root / "bin"
+            invocation_log = root / "ansible-galaxy.args"
+            bin_dir.mkdir()
+
+            (bin_dir / "python3").write_text(
+                f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n',
+                encoding="utf-8",
+            )
+            (bin_dir / "ansible-galaxy").write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$@" > "$HYOPS_TEST_INVOCATION_LOG"\n',
+                encoding="utf-8",
+            )
+            (bin_dir / "python3").chmod(0o755)
+            (bin_dir / "ansible-galaxy").chmod(0o755)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}:{env['PATH']}"
+            env["HYOPS_TEST_INVOCATION_LOG"] = str(invocation_log)
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(installer),
+                    "--root",
+                    str(runtime),
+                    "--collection",
+                    "helper",
+                    "--force",
+                ],
+                capture_output=True,
+                check=False,
+                env=env,
+                text=True,
+            )
+            invocation = invocation_log.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--force", invocation)
+        self.assertIn("--clear-response-cache", invocation)
+
     def test_collection_is_rejected_for_non_galaxy_setup(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
