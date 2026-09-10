@@ -37,6 +37,10 @@ class GcpEveNgBlueprintTest(TestCase):
         self.assertTrue(
             archive["inputs"]["eveng_lab_archive_capture_device_configs"]
         )
+        self.assertEqual(
+            archive["inputs"]["eveng_lab_archive_config_export_timeout_s"],
+            300,
+        )
 
         self.assertEqual(
             validated["order"],

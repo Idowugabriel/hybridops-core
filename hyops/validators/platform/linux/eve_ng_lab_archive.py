@@ -126,6 +126,18 @@ def validate(inputs: dict[str, Any]) -> None:
         raise ValueError(
             "inputs.eveng_lab_archive_capture_device_configs requires an export"
         )
+    config_export_timeout_s = data.get(
+        "eveng_lab_archive_config_export_timeout_s"
+    )
+    if (
+        isinstance(config_export_timeout_s, bool)
+        or not isinstance(config_export_timeout_s, int)
+        or not 1 <= config_export_timeout_s <= 3600
+    ):
+        raise ValueError(
+            "inputs.eveng_lab_archive_config_export_timeout_s must be between "
+            "1 and 3600"
+        )
     if not isinstance(data.get("eveng_lab_archive_activate_saved_configs"), bool):
         raise ValueError(
             "inputs.eveng_lab_archive_activate_saved_configs must be a boolean"

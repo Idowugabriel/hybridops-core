@@ -310,6 +310,20 @@ class BlueprintAccessTests(unittest.TestCase):
         self.assertIn("SSH host identity changed unexpectedly", message)
         self.assertIn("/tmp/access.known_hosts", message)
 
+    def test_dhcp_access_timeout_reports_stale_address_boundary(self) -> None:
+        message = _ssh_access_error(
+            "ssh: connect to host 192.168.0.101 port 22: Operation timed out",
+            Path("/tmp/access.known_hosts"),
+            ssh_target="opsadmin@192.168.0.101",
+            uses_dhcp=True,
+        )
+
+        self.assertIn("SSH access is unavailable", message)
+        self.assertIn("opsadmin@192.168.0.101", message)
+        self.assertIn("uses DHCP", message)
+        self.assertIn("refresh the platform VM state", message)
+        self.assertNotIn("Command '[", message)
+
     def test_known_hosts_is_scoped_to_vm_state_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = _access_known_hosts_file(

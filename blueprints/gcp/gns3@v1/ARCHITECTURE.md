@@ -109,7 +109,7 @@ Base images are independently managed by default and can be reconstructed from t
 A verified migration bundle can provide the initial project state for an
 existing GNS3 installation. Intake checks the archive root, project
 definitions, image references and checksum, then binds the retained copy to
-this blueprint. The source host remains unchanged.
+this blueprint. Capture does not rewrite the source lab data.
 
 The restore operation stops the GNS3 service, applies the retained project and controller state, restores ownership, starts the service and waits for the API to return. The normal blueprint health path then verifies the reconstructed lab environment.
 

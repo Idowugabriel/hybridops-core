@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
+from hyops.runtime import proc
 from hyops.blueprint.command import (
     _confirm_archive_destroy,
     _confirm_guest_quiescence,
@@ -361,6 +362,59 @@ class ResumableBlueprintDestroyTest(TestCase):
                 self.assertNotIn("HYOPS_PROGRESS_CHILD", os.environ)
 
         self.assertEqual(rc, 0)
+
+    def test_archive_reports_native_export_phase_and_verified_size(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = Path(tmp) / "labs.tar.gz"
+            archive_path.write_bytes(b"portable labs")
+            checksum = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+            payload = {
+                "archive_before_destroy": {
+                    "module_ref": "platform/test/archive",
+                    "state_instance": "lab_archive",
+                    "inputs": {
+                        "eveng_lab_archive_config_export_timeout_s": 300,
+                    },
+                }
+            }
+            paths = SimpleNamespace(state_dir=Path(tmp) / "state")
+            state = {
+                "outputs": {
+                    "eveng_lab_archive_path": str(archive_path),
+                    "eveng_lab_archive_sha256": checksum,
+                }
+            }
+
+            def run_archive(*_args):
+                proc._notify_stream_observers(
+                    "stdout",
+                    "TASK [hybridops.helper.eveng_lab_archive : Request EVE-NG "
+                    "native configuration export] *****\n",
+                )
+                return 0
+
+            with (
+                patch(
+                    "hyops.blueprint.command.run_step_module_command",
+                    side_effect=run_archive,
+                ),
+                patch("hyops.blueprint.command.read_module_state", return_value=state),
+                patch("hyops.blueprint.command.ProgressDisplay") as progress_class,
+            ):
+                rc = _run_archive_before_destroy(_namespace(), payload, paths)
+
+        self.assertEqual(rc, 0)
+        progress_class.return_value.update.assert_any_call(
+            "archive_before_destroy",
+            "Lab archive: exporting saved configurations (limit 300s per lab)",
+        )
+        progress_class.return_value.finish.assert_called_with(
+            "archive_before_destroy",
+            "Lab archive",
+            "ok",
+            plain="lab_archive status=ok",
+            detail="13 bytes verified",
+        )
 
     def test_second_destroy_skips_terminal_state_before_inputs(self):
         rc, inputs_file, command = self._run(
