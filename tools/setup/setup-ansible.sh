@@ -406,7 +406,7 @@ install_selected_hybridops_collections() {
         -p "${collections_dir}"
       )
       if [[ "${FORCE}" == "true" ]]; then
-        install_args+=(--force)
+        install_args+=(--force --clear-response-cache)
       fi
       env -u ANSIBLE_COLLECTIONS_PATHS \
         ANSIBLE_COLLECTIONS_PATH="${collections_dir}:${collections_tail}" \

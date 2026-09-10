@@ -40,6 +40,8 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Fixed
 
+- Cleared cached Galaxy response metadata during forced targeted collection
+  refreshes so a republished pinned collection can be installed safely.
 - Reported the active archive phase and verified size during protected teardown
   instead of leaving one undifferentiated progress spinner.
 - Replaced raw SSH timeouts during on-premises blueprint access with bounded,
