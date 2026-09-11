@@ -22,6 +22,39 @@ hyops blueprint init --env <env> --ref gcp/eve-ng@v1 --edit
 
 EVE-NG credentials and authorised IOL licence content belong in the encrypted environment vault, not in the blueprint.
 
+## Cost
+
+The reference shape is `n2-standard-8` with a 256 GB `pd-standard` disk, sized
+to leave room for nested workloads and images rather than to be the smallest
+viable host. `machine_type`, `boot_disk_size_gb` and `eveng_resource_profile`
+are declared in the environment copy and are not autoscaled.
+
+Core reports a fixed hourly estimate on the access and destroy paths. `plan`
+does not price a deployment, and provider billing remains authoritative for
+realised spend.
+
+Size from a representative running topology rather than node count alone.
+Discussion [#291](https://github.com/hybridops-tech/hybridops-core/discussions/291)
+records measured review points for lighter and denser topologies. A persistent
+disk cannot be shrunk in place, so realising a disk reduction requires archive,
+destroy and redeploy through the edited environment copy.
+
+Plan the shape and session pattern before the first deploy when evaluating on
+trial credit. The reference shape running continuously consumes a significant
+share of an allowance within days, which is easy to overlook when lifecycle
+work spans several sittings. Release the environment between sessions rather
+than leaving it running:
+
+    hyops blueprint destroy --env <env> --ref gcp/eve-ng@v1 \
+      --execute --archive-before-destroy
+
+    hyops blueprint deploy --env <env> --ref gcp/eve-ng@v1 \
+      --execute --restore-labs
+
+That releases both the VM and the disk. Stopping the instance avoids compute
+charges but leaves the disk billed and the environment outside the HybridOps
+lifecycle; it is not a substitute for a verified archive.
+
 ## Documentation
 
 - [Operator runbook](https://docs.hybridops.tech/ops/runbooks/platform/blueprints/hyops-blueprint-eve-ng/)
