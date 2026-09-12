@@ -3,7 +3,7 @@
     {
       "name": "hybridops.common",
       "repo": "git@github.com:hybridops-tech/ansible-collection-common.git",
-      "ref": "4d236d45b3d849b94e8894ff97db62693342c56f"
+      "ref": "57a987cb41ac1e0409a1a537ad358aabbe1eb964"
     },
     {
       "name": "hybridops.helper",

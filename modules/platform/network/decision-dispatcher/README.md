@@ -39,8 +39,8 @@ and checks. Runtime metadata such as the generated `dispatch_id`, timestamp and
 request status is not part of that digest.
 
 This separates the request's stable runtime identity from the exact artefact an
-operator approves. A consumer can therefore detect when approval-relevant
-contents change while the same `dispatch_id` remains in use.
+operator approves. When approval is required, a consumer can therefore reject
+approval for different contents even when the same `dispatch_id` remains in use.
 
 ## Execution mode
 

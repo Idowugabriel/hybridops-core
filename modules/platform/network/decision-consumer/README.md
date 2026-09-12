@@ -6,17 +6,22 @@ Deploy a deterministic decision consumer on the shared control host.
 
 - Runs a local consumer service under `systemd`.
 - Watches dispatcher request files under `/opt/hybridops/decision-dispatcher/state/requests`.
+- Verifies each request's declared approval identity before applying its approval posture.
 - Waits for approval when a request requires approval.
 - Verifies that approval still belongs to the exact approval-relevant request artefact.
 - Emits normalized execution records under `/opt/hybridops/decision-consumer/state/executions`.
 
 ## Approval contract
 
+Every request must retain the payload version and SHA-256 identity written by
+the dispatcher. Its `dispatch_id` must also match the request filename. These
+checks apply before the consumer evaluates `requires_approval`.
+
 For a request with `requires_approval: true`, approval is not satisfied by the
-presence of a marker for the same `dispatch_id` alone.
+presence of a record for the same `dispatch_id` alone.
 
 The approval file remains named `<dispatch_id>.approved.json`, but it must bind
-to the request's current immutable approval identity:
+to the request's current approval identity:
 
 - `dispatch_id`
 - `approval_payload_version`
@@ -32,19 +37,24 @@ the current approval-relevant request contents. A missing or malformed approval
 identity is invalid. A digest that no longer matches the current request is
 stale. Neither condition can produce `approved-ready`.
 
+`approved_by` and `approved_at` must be non-empty strings. A record without that
+audit context is invalid.
+
 The resulting execution record preserves the approved artefact identity and
 approval context so later stages can retain provenance for what was actually
 authorised.
 
-Routes that explicitly set `requires_approval: false` retain their existing
-no-approval semantics. Their execution records still carry the current artefact
-identity for provenance.
+Routes that explicitly set `requires_approval: false` retain their no-approval
+semantics after request identity verification. Their execution records still
+carry the current artefact identity for provenance.
 
 ## What it does not do in v1
 
 - It does not execute `hyops`.
 - It does not mutate dispatcher request files.
 - It does not replace the runner model.
+- It does not authenticate filesystem writers or provide signed approvals. The
+  request and approval directories remain trusted boundaries.
 - It does not perform the separate final live-state precondition check that
   belongs at a real execution boundary.
 
