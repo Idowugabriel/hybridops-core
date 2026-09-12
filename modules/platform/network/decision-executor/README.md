@@ -23,8 +23,12 @@ This keeps the control loop explicit:
 
 - decision service evaluates signals and emits records
 - decision dispatcher turns those records into dispatch requests
-- decision consumer applies approval posture and emits execution records
+- decision consumer applies the approval contract and emits execution records
 - decision executor turns approved execution records into dry-run execution attempts
+
+The consumer's approval context, including the approved artefact identity, is
+carried into the staged attempt record. That preserves what was authorised
+without treating this dry-run stage as a final deployment gate.
 
 ## Execution mode
 
@@ -33,8 +37,13 @@ The shipped mode is `dry-run`.
 That means:
 
 - every approved execution record produces an execution-attempt record
-- target metadata is preserved for a future runner or workflow adapter
+- target metadata and approval provenance are preserved for a future runner or workflow adapter
 - no local `hyops apply`, `hyops runner`, or GitHub Actions call is performed
+- no claim is made that live deployment preconditions were rechecked here
+
+A final pre-deployment live-state check belongs at the later real execution
+boundary, where those preconditions can be observed and enforced immediately
+before mutation.
 
 Future execution modes may add real runner or workflow dispatch, but the first
 release posture is deliberately non-destructive.

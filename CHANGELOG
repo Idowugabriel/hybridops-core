@@ -4,6 +4,14 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ## Unreleased
 
+### Changed
+
+- Bound decision approval to a versioned SHA-256 identity of the approval-relevant
+  dispatch artefact. The approval-only consumer verifies request identity before
+  applying approval posture, rejects stale or incomplete approval records, and
+  preserves the approved identity and audit context in `approved-ready` records.
+  The downstream executor remains dry-run.
+
 ## [v0.1.5] - 2026-09-09
 
 ### Added

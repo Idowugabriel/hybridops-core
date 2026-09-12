@@ -25,6 +25,23 @@ This keeps the control plane simple:
 - decision dispatcher normalizes those records into execution requests
 - a runner or workflow engine can consume those requests later
 
+## Approval artefact identity
+
+Every dispatch request carries a deterministic identity for the contents that
+matter to approval:
+
+- `approval_payload_version`
+- `approval_artifact_sha256`
+
+The version-one digest covers the source decision identity, decision type,
+execution plane, target kind/reference/environment, approval posture, rationale
+and checks. Runtime metadata such as the generated `dispatch_id`, timestamp and
+request status is not part of that digest.
+
+This separates the request's stable runtime identity from the exact artefact an
+operator approves. When approval is required, a consumer can therefore reject
+approval for different contents even when the same `dispatch_id` remains in use.
+
 ## Execution mode
 
 The shipped mode is `record-only`.
@@ -32,7 +49,7 @@ The shipped mode is `record-only`.
 That means:
 
 - every matching decision record produces a dispatch request
-- approval posture is captured in the request
+- approval posture and approval artefact identity are captured in the request
 - no local `hyops apply` or `hyops runner` command is executed by the dispatcher
 
 Future execution modes may be added later, but the default release posture is

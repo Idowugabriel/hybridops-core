@@ -25,3 +25,5 @@ while IFS= read -r playbook; do
     --syntax-check \
     "${playbook}"
 done < <(hyops_ci::all_ansible_playbooks)
+
+python3 "${SCRIPT_DIR}/check-decision-approval-binding.py"
