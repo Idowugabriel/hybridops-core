@@ -1,0 +1,8 @@
+{
+  "dispatch_id": "dispatch-20260912T120000Z-cutover-example1234",
+  "approval_payload_version": 1,
+  "approval_artifact_sha256": "<sha256 copied from the current dispatch request>",
+  "approved_by": "operator@example.com",
+  "approved_at": "2026-09-12T12:00:00Z",
+  "note": "approved for the planned change window"
+}
