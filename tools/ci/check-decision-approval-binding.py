@@ -183,6 +183,7 @@ def _stale_then_corrected(collection_root: Path, root: Path) -> None:
 def _posture_mutation(collection_root: Path, root: Path) -> None:
     case = ApprovalBindingAcceptance(collection_root, root)
     request = case.dispatch()
+    case.approve(request)
     request["requires_approval"] = False
     case.write_request(request)
     state = case.consumer["_process"](case.config(), {})
