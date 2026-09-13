@@ -76,6 +76,13 @@ hyops blueprint validate --ref onprem/authoritative-foundation@v1
 hyops blueprint plan --ref onprem/authoritative-foundation@v1
 ```
 
+List local runtime environments without contacting their infrastructure:
+
+```bash
+hyops show env list
+hyops show env list --json
+```
+
 See the [authoritative foundation blueprint](blueprints/onprem/authoritative-foundation@v1/) or browse the [Blueprint Index](https://docs.hybridops.tech/platform/blueprints/).
 
 If this operating model is useful to your work, star the repository to follow its development.

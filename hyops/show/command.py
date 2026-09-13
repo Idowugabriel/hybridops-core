@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +44,16 @@ def add_show_subparser(sp: argparse._SubParsersAction) -> None:
     q.add_argument("--json", action="store_true", help="Emit JSON.")
     q.set_defaults(_handler=run_show_module)
 
-    q = ssp.add_parser("env", help="Show a summarized environment view from runtime state.")
-    q.add_argument("--root", default=None, help="Override runtime root.")
+    q = ssp.add_parser("env", help="Show or list environments from runtime state.")
+    q.add_argument("action", nargs="?", choices=("list",), help="List all environments.")
+    q.add_argument(
+        "--root",
+        default=None,
+        help="Override runtime root; with list, the environments directory.",
+    )
     q.add_argument("--env", default=None, help="Runtime environment namespace.")
     q.add_argument("--json", action="store_true", help="Emit JSON.")
-    q.set_defaults(_handler=run_show_env)
+    q.set_defaults(_handler=run_show_env_command)
 
 
 def _resolve_paths(ns, *, label: str) -> Any:
@@ -106,6 +112,167 @@ def _read_json_file(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
+
+
+def _blueprint_refs(config_dir: Path) -> tuple[list[str], list[str], list[Path]]:
+    refs: list[str] = []
+    invalid: list[str] = []
+    paths = sorted(
+        {
+            *config_dir.glob("blueprints/*.yml"),
+            *config_dir.glob("blueprints/*.yaml"),
+        }
+    )
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            invalid.append(path.name)
+            continue
+        ref = ""
+        for line in lines:
+            key, separator, value = line.partition(":")
+            if separator and key.strip() == "blueprint_ref":
+                ref = value.split("#", 1)[0].strip().strip("'\"")
+                break
+        if ref:
+            refs.append(ref)
+        else:
+            invalid.append(path.name)
+    return sorted(set(refs)), invalid, paths
+
+
+def _read_environment_states(state_dir: Path) -> tuple[list[dict[str, Any]], list[str], list[Path]]:
+    paths = sorted({*_module_latest_paths(state_dir), *_module_instance_paths(state_dir)})
+    states: list[dict[str, Any]] = []
+    invalid: list[str] = []
+    for path in paths:
+        payload = _read_json_file(path)
+        if isinstance(payload, dict):
+            states.append(payload)
+        else:
+            invalid.append(str(path))
+    return states, invalid, paths
+
+
+def _readiness_summary(markers: list[dict[str, Any]]) -> str:
+    if not markers:
+        return "uninitialized"
+    statuses = {str(item.get("status") or "unknown").strip().lower() for item in markers}
+    if "invalid" in statuses:
+        return "invalid"
+    if statuses <= {"ok", "ready"}:
+        return "ready"
+    if statuses & {"error", "failed", "blocked"}:
+        return "error"
+    return "mixed" if len(statuses) > 1 else next(iter(statuses))
+
+
+def _state_summary(states: list[dict[str, Any]], invalid: list[str]) -> str:
+    if invalid:
+        return "invalid"
+    if not states:
+        return "empty"
+
+    statuses = {str(item.get("status") or "unknown").strip().lower() for item in states}
+    if statuses & {"error", "failed", "blocked", "cancelled"}:
+        return "error"
+
+    groups: set[str] = set()
+    for status in statuses:
+        if status in {"ok", "ready", "active", "retained"}:
+            groups.add("active")
+        elif status in {"absent", "destroyed", "missing"}:
+            groups.add("destroyed")
+        else:
+            groups.add("unknown")
+    return next(iter(groups)) if len(groups) == 1 else "mixed"
+
+
+def _latest_activity(paths: list[Path], env_root: Path) -> str:
+    timestamps: list[float] = []
+    for path in [env_root, *paths]:
+        try:
+            timestamps.append(path.stat().st_mtime)
+        except OSError:
+            continue
+    if not timestamps:
+        return ""
+    return datetime.fromtimestamp(max(timestamps), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _environment_summary(env_root: Path) -> dict[str, Any]:
+    markers = _list_markers(env_root / "meta")
+    states, invalid_states, state_paths = _read_environment_states(env_root / "state")
+    blueprints, invalid_blueprints, blueprint_paths = _blueprint_refs(env_root / "config")
+
+    marker_statuses = Counter(str(item.get("status") or "unknown") for item in markers)
+    state_statuses = Counter(str(item.get("status") or "unknown") for item in states)
+    targets = sorted(
+        {
+            str(item.get("target") or "").strip()
+            for item in markers
+            if str(item.get("target") or "").strip()
+        }
+    )
+    marker_paths = sorted((env_root / "meta").glob("*.ready.json"))
+
+    return {
+        "name": env_root.name,
+        "readiness": _readiness_summary(markers),
+        "state": _state_summary(states, invalid_states),
+        "targets": targets,
+        "blueprints": blueprints,
+        "last_activity": _latest_activity(
+            [*marker_paths, *state_paths, *blueprint_paths],
+            env_root,
+        ),
+        "readiness_status_counts": dict(sorted(marker_statuses.items())),
+        "state_status_counts": dict(sorted(state_statuses.items())),
+        "invalid_state_files": invalid_states,
+        "invalid_blueprint_files": invalid_blueprints,
+    }
+
+
+def _compact_list(values: list[str], *, limit: int) -> str:
+    if not values:
+        return "-"
+    rendered = ",".join(values)
+    if len(rendered) <= limit:
+        return rendered
+    if len(values) > 1:
+        suffix = f" +{len(values) - 1}"
+        first = values[0]
+        if len(first) + len(suffix) <= limit:
+            return f"{first}{suffix}"
+    return f"{rendered[: limit - 3]}..."
+
+
+def _print_environment_list(environments: list[dict[str, Any]]) -> None:
+    if not environments:
+        print("environments: none")
+        return
+
+    rows = [
+        (
+            str(item["name"]),
+            str(item["readiness"]),
+            str(item["state"]),
+            _compact_list(item["targets"], limit=18),
+            _compact_list(item["blueprints"], limit=36),
+            str(item["last_activity"] or "-"),
+        )
+        for item in environments
+    ]
+    headers = ("ENVIRONMENT", "READINESS", "STATE", "TARGETS", "BLUEPRINTS", "LAST ACTIVITY")
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+
+    print("  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)))
+    for row in rows:
+        print("  ".join(value.ljust(widths[index]) for index, value in enumerate(row)))
 
 
 def _format_scalar(value: Any) -> str:
@@ -448,6 +615,55 @@ def run_show_module(ns) -> int:
     return OK
 
 
+def run_show_env_command(ns) -> int:
+    if str(getattr(ns, "action", "") or "") == "list":
+        return run_show_env_list(ns)
+    return run_show_env(ns)
+
+
+def run_show_env_list(ns) -> int:
+    if str(getattr(ns, "env", "") or "").strip():
+        print("ERR: show env list does not accept --env", file=sys.stderr)
+        return OPERATOR_ERROR
+
+    root_value = str(getattr(ns, "root", "") or "").strip()
+    envs_root = (
+        Path(root_value).expanduser().resolve()
+        if root_value
+        else (Path.home() / ".hybridops" / "envs").resolve()
+    )
+    if not envs_root.exists():
+        environments: list[dict[str, Any]] = []
+    elif not envs_root.is_dir():
+        print(f"ERR: environments path is not a directory: {envs_root}", file=sys.stderr)
+        return OPERATOR_ERROR
+    else:
+        try:
+            environment_paths = sorted(
+                (
+                    path
+                    for path in envs_root.iterdir()
+                    if path.is_dir() and not path.name.startswith(".")
+                ),
+                key=lambda path: path.name.casefold(),
+            )
+            environments = [_environment_summary(path) for path in environment_paths]
+        except OSError as exc:
+            print(f"ERR: failed to list environments: {exc}", file=sys.stderr)
+            return 1
+
+    payload = {
+        "envs_root": str(envs_root),
+        "count": len(environments),
+        "environments": environments,
+    }
+    if getattr(ns, "json", False):
+        return _emit_json(payload)
+
+    _print_environment_list(environments)
+    return OK
+
+
 def run_show_env(ns) -> int:
     try:
         paths = _resolve_paths(ns, label="show env")
@@ -557,6 +773,8 @@ def run_show_env(ns) -> int:
 
 __all__ = [
     "add_show_subparser",
+    "run_show_env_command",
+    "run_show_env_list",
     "run_show_env",
     "run_show_init",
     "run_show_module",
