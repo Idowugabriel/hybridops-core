@@ -118,8 +118,10 @@
             ({
               'rke2_token': lookup('env', rke2_token_env),
               'kubernetes_api_server_host': (
-                hostvars[(groups.get('rke2_servers', []) | first)].ansible_host
-                | default((groups.get('rke2_servers', []) | first))
+                hostvars[(groups.get('rke2_servers', []) | first)].advertise_address
+                | default(hostvars[(groups.get('rke2_servers', []) | first)].node_ip, true)
+                | default(hostvars[(groups.get('rke2_servers', []) | first)].ansible_host, true)
+                | default((groups.get('rke2_servers', []) | first), true)
               )
             }
               | combine(_base_role_vars, recursive=True)
@@ -154,8 +156,10 @@
       vars:
         _hyops_registration_host: >-
           {{
-            hostvars[(groups.get('rke2_servers', []) | first)].ansible_host
-            | default((groups.get('rke2_servers', []) | first))
+            hostvars[(groups.get('rke2_servers', []) | first)].advertise_address
+            | default(hostvars[(groups.get('rke2_servers', []) | first)].node_ip, true)
+            | default(hostvars[(groups.get('rke2_servers', []) | first)].ansible_host, true)
+            | default((groups.get('rke2_servers', []) | first), true)
           }}
       ansible.builtin.lineinfile:
         path: /etc/rancher/rke2/config.yaml
@@ -363,8 +367,10 @@
       vars:
         _hyops_registration_host: >-
           {{
-            hostvars[(groups.get('rke2_servers', []) | first)].ansible_host
-            | default((groups.get('rke2_servers', []) | first))
+            hostvars[(groups.get('rke2_servers', []) | first)].advertise_address
+            | default(hostvars[(groups.get('rke2_servers', []) | first)].node_ip, true)
+            | default(hostvars[(groups.get('rke2_servers', []) | first)].ansible_host, true)
+            | default((groups.get('rke2_servers', []) | first), true)
           }}
       ansible.builtin.lineinfile:
         path: /etc/rancher/rke2/config.yaml

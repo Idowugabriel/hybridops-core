@@ -55,6 +55,11 @@ control-plane host, `advertise_address` to that address. These are ordinary
 per-host inventory variables passed to the upstream RKE2 role; they may differ
 from the SSH management address.
 
+When recovery reconciles a server or agent registration endpoint, HybridOps
+uses the first server's `advertise_address`, then `node_ip`, and only falls
+back to its SSH address. This keeps the registration path on the routable
+Kubernetes node network for multi-homed hosts.
+
 When multi-homed nodes use valid asymmetric return paths, set
 `rke2_reverse_path_filter_mode: loose`. The module persists Linux
 `rp_filter=2` without restarting RKE2. Leave the default `preserve` when the
