@@ -17,6 +17,11 @@ This changelog records significant operator-facing capabilities, lifecycle chang
   preserves the approved identity and audit context in `approved-ready` records.
   The downstream executor remains dry-run.
 
+### Fixed
+
+- Suppressed Python tracebacks when an operator cancels installation with
+  `Ctrl-C`; transactional cleanup and exit status 130 are preserved.
+
 ## [v0.1.5] - 2026-09-09
 
 ### Added

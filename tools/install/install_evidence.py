@@ -57,5 +57,12 @@ def main() -> int:
     return 2
 
 
+def entrypoint() -> int:
+    try:
+        return main()
+    except KeyboardInterrupt:
+        return 130
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())
