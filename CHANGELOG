@@ -4,6 +4,11 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ## Unreleased
 
+### Added
+
+- Added `hyops show env list` with concise and JSON views of local environment
+  readiness, state, initialized targets, blueprint references and last activity.
+
 ### Changed
 
 - Bound decision approval to a versioned SHA-256 identity of the approval-relevant
