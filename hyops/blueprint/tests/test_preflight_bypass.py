@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
+from hyops.authority import AuthorityReceipt
 from hyops.blueprint.command import _successful_deploy_actions, run_deploy
 from hyops.runtime.exitcodes import OPERATOR_ERROR
 from hyops.runtime.paths import RuntimePaths
@@ -125,7 +126,18 @@ class BlueprintPreflightBypassTest(TestCase):
                 patch("hyops.blueprint.command._confirm_deploy_if_needed", return_value=0),
                 patch("hyops.blueprint.command.resolved_step_inputs_file", return_value=None),
                 patch("hyops.blueprint.command.module_state_ok", return_value=False),
-                patch("hyops.blueprint.command.enforce_step_contracts"),
+                patch(
+                    "hyops.blueprint.command.enforce_step_contracts",
+                    return_value=AuthorityReceipt(
+                        logical_ref="primary_ipam",
+                        capability="inventory_ipam",
+                        provider="nautobot",
+                        state="ready",
+                        result="admitted",
+                        endpoint="https://nautobot.example",
+                        revision="2.4",
+                    ),
+                ),
                 patch("hyops.blueprint.command.run_step_module_command", side_effect=run_step),
             ):
                 rc = run_deploy(
@@ -137,6 +149,8 @@ class BlueprintPreflightBypassTest(TestCase):
         self.assertEqual(captured["decision"], "bypass")
         self.assertEqual(captured["status"], "bypassed")
         self.assertEqual(captured["reason"], "controlled provider recovery")
+        self.assertEqual(captured["authority"]["logical_authority"], "primary_ipam")
+        self.assertEqual(captured["authority"]["provider"], "nautobot")
 
     def test_checked_decision_is_propagated_to_executed_steps(self) -> None:
         captured: dict = {}

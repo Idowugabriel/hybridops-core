@@ -26,6 +26,7 @@ from typing import Any, Callable
 
 import yaml
 
+from hyops.authority import AuthorityReceipt
 from hyops.drivers.iac.terragrunt.contracts import get_contract
 from hyops.runtime.browser import is_windows_wsl, open_operator_url
 from hyops.runtime.cost import CostEstimate, format_money
@@ -4713,7 +4714,7 @@ def run_deploy(ns) -> int:
                 print(f"step={step_id} status=rerun reason={drift_detail}")
 
         try:
-            enforce_step_contracts(step, payload, paths)
+            authority_receipt = enforce_step_contracts(step, payload, paths)
         except Exception as exc:
             result = dict(base)
             result.update({"status": "failed", "reason": str(exc), "rc": OPERATOR_ERROR})
@@ -4730,6 +4731,18 @@ def run_deploy(ns) -> int:
             if fail_fast:
                 break
             continue
+
+        authority_evidence = (
+            authority_receipt.to_evidence()
+            if isinstance(authority_receipt, AuthorityReceipt)
+            else None
+        )
+        if authority_evidence is not None:
+            base["authority"] = authority_evidence
+        step_preflight_context = dict(preflight_decision)
+        if authority_evidence is not None:
+            step_preflight_context["authority"] = authority_evidence
+        ns.preflight_context = step_preflight_context
 
         progress.start(
             step_id,

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from hyops.authority import AuthorityReceipt
 from hyops.drivers.iac.terragrunt.contracts import get_contract
 from hyops.drivers.config.ansible.config import resolve_required_env
 from hyops.drivers.config.ansible.runtime_env import merge_vault_env, missing_env
@@ -188,7 +189,14 @@ def preflight_step(
             )
 
     try:
-        enforce_step_contracts(step, payload, paths, assumed_state_ok=assumed_state_ok)
+        authority_receipt = enforce_step_contracts(
+            step,
+            payload,
+            paths,
+            assumed_state_ok=assumed_state_ok,
+        )
+        if isinstance(authority_receipt, AuthorityReceipt):
+            result["authority"] = authority_receipt.to_evidence()
         result["checks"].append({"name": "contracts", "ok": True, "detail": "ok"})
     except Exception as exc:
         result["status"] = "blocked"

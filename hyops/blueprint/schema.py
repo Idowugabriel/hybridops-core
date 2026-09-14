@@ -15,12 +15,16 @@ from .common import as_mapping, as_non_empty_string, bool_field
 from .constants import (
     ACTION_SET,
     ADDRESSING_MODE_SET,
-    AUTHORITY_SET,
+    LEGACY_AUTHORITY_SET,
     BLUEPRINT_REF_RE,
     MODE_SET,
     PHASE_SET,
     STEP_ID_RE,
 )
+
+
+AUTHORITY_REF_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+AUTHORITY_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 
 
 def resolve_blueprint_file(ref: str, file_path: str, blueprints_root: Path) -> Path:
@@ -107,9 +111,10 @@ def validate_policy(raw_policy: Any) -> dict[str, Any]:
         )
     if "ipam_authority" in policy:
         authority = as_non_empty_string(policy.get("ipam_authority"), "policy.ipam_authority").lower()
-        if authority not in AUTHORITY_SET:
+        if authority not in LEGACY_AUTHORITY_SET:
             raise ValueError(
-                f"policy.ipam_authority must be one of: {', '.join(sorted(AUTHORITY_SET))}"
+                "policy.ipam_authority must be one of: "
+                f"{', '.join(sorted(LEGACY_AUTHORITY_SET))}"
             )
         out["ipam_authority"] = authority
     if "netbox_live_api_check" in policy:
@@ -117,6 +122,47 @@ def validate_policy(raw_policy: Any) -> dict[str, Any]:
             policy.get("netbox_live_api_check"),
             "policy.netbox_live_api_check",
         )
+    return out
+
+
+def validate_authorities(raw_authorities: Any) -> dict[str, dict[str, Any]]:
+    if raw_authorities is None:
+        return {}
+    authorities = as_mapping(raw_authorities, "authorities")
+    out: dict[str, dict[str, Any]] = {}
+    for raw_ref, raw_declaration in authorities.items():
+        logical_ref = str(raw_ref or "").strip().lower()
+        if not AUTHORITY_REF_RE.fullmatch(logical_ref):
+            raise ValueError(
+                "authorities keys must match ^[a-z][a-z0-9_]{0,63}$"
+            )
+        declaration = as_mapping(raw_declaration, f"authorities.{logical_ref}")
+        allowed = {"capability", "provider", "config"}
+        unknown = sorted(str(key) for key in declaration if str(key) not in allowed)
+        if unknown:
+            raise ValueError(
+                f"authorities.{logical_ref} has unknown keys: {', '.join(unknown)}"
+            )
+        capability = as_non_empty_string(
+            declaration.get("capability"),
+            f"authorities.{logical_ref}.capability",
+        ).lower()
+        provider = as_non_empty_string(
+            declaration.get("provider"),
+            f"authorities.{logical_ref}.provider",
+        ).lower()
+        if not AUTHORITY_TOKEN_RE.fullmatch(capability):
+            raise ValueError(f"authorities.{logical_ref}.capability has invalid format")
+        if not AUTHORITY_TOKEN_RE.fullmatch(provider):
+            raise ValueError(f"authorities.{logical_ref}.provider has invalid format")
+        config = declaration.get("config")
+        if config is not None:
+            config = as_mapping(config, f"authorities.{logical_ref}.config")
+        out[logical_ref] = {
+            "capability": capability,
+            "provider": provider,
+            "config": dict(config or {}),
+        }
     return out
 
 
@@ -168,6 +214,7 @@ def validate_blueprint(spec: dict[str, Any], path: Path) -> dict[str, Any]:
     if metadata is not None:
         as_mapping(metadata, "metadata")
     policy = validate_policy(spec.get("policy"))
+    authorities = validate_authorities(spec.get("authorities"))
     raw_recoverable = spec.get("recoverable_secrets") or []
     if not isinstance(raw_recoverable, list):
         raise ValueError("recoverable_secrets must be a list")
@@ -568,24 +615,93 @@ def validate_blueprint(spec: dict[str, Any], path: Path) -> dict[str, Any]:
                 )
 
             if "requires_authority" in contract_map:
-                authority = as_non_empty_string(
-                    contract_map.get("requires_authority"),
-                    f"steps[{idx}].contracts.requires_authority",
-                ).lower()
-                if authority not in AUTHORITY_SET:
-                    raise ValueError(
-                        f"steps[{idx}].contracts.requires_authority must be one of: "
-                        f"{', '.join(sorted(AUTHORITY_SET))}"
+                raw_authority = contract_map.get("requires_authority")
+                if isinstance(raw_authority, dict):
+                    requirement = as_mapping(
+                        raw_authority,
+                        f"steps[{idx}].contracts.requires_authority",
                     )
-                contracts["requires_authority"] = authority
+                    allowed_requirement = {"ref", "capability"}
+                    unknown_requirement = sorted(
+                        str(key)
+                        for key in requirement
+                        if str(key) not in allowed_requirement
+                    )
+                    if unknown_requirement:
+                        raise ValueError(
+                            f"steps[{idx}].contracts.requires_authority has unknown keys: "
+                            f"{', '.join(unknown_requirement)}"
+                        )
+                    logical_ref = as_non_empty_string(
+                        requirement.get("ref"),
+                        f"steps[{idx}].contracts.requires_authority.ref",
+                    ).lower()
+                    capability = as_non_empty_string(
+                        requirement.get("capability"),
+                        f"steps[{idx}].contracts.requires_authority.capability",
+                    ).lower()
+                    if not AUTHORITY_REF_RE.fullmatch(logical_ref):
+                        raise ValueError(
+                            f"steps[{idx}].contracts.requires_authority.ref has invalid format"
+                        )
+                    if not AUTHORITY_TOKEN_RE.fullmatch(capability):
+                        raise ValueError(
+                            f"steps[{idx}].contracts.requires_authority.capability has invalid format"
+                        )
+                    contracts["requires_authority"] = {
+                        "ref": logical_ref,
+                        "capability": capability,
+                    }
+                else:
+                    authority = as_non_empty_string(
+                        raw_authority,
+                        f"steps[{idx}].contracts.requires_authority",
+                    ).lower()
+                    if authority not in LEGACY_AUTHORITY_SET and not AUTHORITY_REF_RE.fullmatch(authority):
+                        raise ValueError(
+                            f"steps[{idx}].contracts.requires_authority must be a logical "
+                            "authority reference or the legacy value netbox/none"
+                        )
+                    contracts["requires_authority"] = authority
 
-        if (
-            contracts["addressing_mode"] == "ipam"
-            and contracts["requires_authority"] != "netbox"
-        ):
-            raise ValueError(
-                f"steps[{idx}] uses addressing_mode=ipam and must set contracts.requires_authority=netbox"
-            )
+        authority_requirement = contracts["requires_authority"]
+        if isinstance(authority_requirement, dict):
+            logical_ref = authority_requirement["ref"]
+            capability = authority_requirement["capability"]
+            declaration = authorities.get(logical_ref)
+            if declaration is None:
+                raise ValueError(
+                    f"steps[{idx}] requires missing authority binding '{logical_ref}'"
+                )
+            if declaration["capability"] != capability:
+                raise ValueError(
+                    f"steps[{idx}] authority capability mismatch: '{logical_ref}' "
+                    f"declares '{declaration['capability']}', requires '{capability}'"
+                )
+        elif authority_requirement not in LEGACY_AUTHORITY_SET:
+            declaration = authorities.get(authority_requirement)
+            if declaration is None:
+                raise ValueError(
+                    f"steps[{idx}] requires missing authority binding '{authority_requirement}'"
+                )
+
+        if contracts["addressing_mode"] == "ipam":
+            if not isinstance(authority_requirement, dict) and authority_requirement in {"none", ""}:
+                raise ValueError(
+                    f"steps[{idx}] uses addressing_mode=ipam and must require an "
+                    "inventory_ipam authority"
+                )
+            if isinstance(authority_requirement, dict):
+                required_capability = authority_requirement["capability"]
+            elif authority_requirement == "netbox":
+                required_capability = "inventory_ipam"
+            else:
+                required_capability = authorities[authority_requirement]["capability"]
+            if required_capability != "inventory_ipam":
+                raise ValueError(
+                    f"steps[{idx}] uses addressing_mode=ipam but authority capability is "
+                    f"'{required_capability}', expected 'inventory_ipam'"
+                )
 
         steps.append(
             {
@@ -676,6 +792,7 @@ def validate_blueprint(spec: dict[str, Any], path: Path) -> dict[str, Any]:
         "mode": mode,
         "metadata": metadata if isinstance(metadata, dict) else {},
         "policy": policy,
+        "authorities": authorities,
         "recoverable_secrets": recoverable_secrets,
         "access": access,
         "archive_before_destroy": archive_before_destroy,

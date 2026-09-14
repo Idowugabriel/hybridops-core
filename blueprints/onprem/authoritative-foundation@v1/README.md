@@ -4,6 +4,11 @@ Bring up the day-1 on-prem foundation where NetBox-backed state gates IPAM-drive
 
 Outcome: subsequent platform services provision from authoritative NetBox-backed intent.
 
+This blueprint uses the canonical operation authority contract. Its steps require
+the logical `primary_ipam` authority and the `inventory_ipam` capability; the
+top-level binding selects NetBox. The dependent steps do not select NetBox or
+repeat its module-state gate.
+
 ## Chain
 
 ```text

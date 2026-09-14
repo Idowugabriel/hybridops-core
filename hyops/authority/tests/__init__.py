@@ -1,0 +1,1 @@
+"""Authority contract tests."""

@@ -6,11 +6,17 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Added
 
+- Added a provider-neutral operation authority contract with typed logical
+  requirements, centralized provider resolution, secret-safe receipts, and
+  independently selectable NetBox and Nautobot `inventory_ipam` bindings.
 - Added `hyops show env list` with concise and JSON views of local environment
   readiness, state, initialized targets, blueprint references and last activity.
 
 ### Changed
 
+- Made the authoritative-foundation blueprint use the logical
+  `primary_ipam` authority while retaining the existing NetBox-specific syntax
+  as an explicit compatibility form.
 - Bound decision approval to a versioned SHA-256 identity of the approval-relevant
   dispatch artefact. The approval-only consumer verifies request identity before
   applying approval posture, rejects stale or incomplete approval records, and

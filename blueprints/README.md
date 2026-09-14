@@ -9,14 +9,44 @@ They package repeatable outcomes, not implementation details.
 
 ## Operating Modes
 - `bootstrap`: Day-0 bring-up with minimal prerequisites.
-- `authoritative`: Day-1+ operation where NetBox-backed IPAM/inventory is authoritative.
+- `authoritative`: Day-1+ operation where a declared source-of-truth capability is authoritative.
 - `hybrid`: mixed bootstrap + authoritative flow in one chain.
 
 ## Contract Model
 - `intent`: module input intent is declared per step.
-- `policy`: run behavior guardrails (`fail_fast`, `evidence_required`, `ipam_authority`, `netbox_live_api_check`).
-- `contracts`: per-step delivery contracts (`addressing_mode`, required upstream state).
+- `policy`: run behavior guardrails (`fail_fast`, `evidence_required`).
+- `authorities`: logical capabilities bound to a shipped authority provider.
+- `contracts`: per-step delivery contracts (`addressing_mode`, logical authority requirements, required upstream state).
 - `verification`: probes remain module-level and run records remain deterministic.
+
+The canonical authority form is provider-neutral at the operation boundary:
+
+```yaml
+authorities:
+  primary_ipam:
+    capability: inventory_ipam
+    provider: netbox  # or nautobot
+
+steps:
+  - id: allocate_platform_address
+    module_ref: platform/onprem/platform-vm
+    contracts:
+      addressing_mode: ipam
+      requires_authority:
+        ref: primary_ipam
+        capability: inventory_ipam
+```
+
+Provider selection is centralized in the authority registry. Missing, unknown,
+unhealthy, unreachable, stale (when a freshness bound is configured), or
+capability-incompatible bindings fail closed. Successful preflight and
+execution evidence includes a secret-free authority receipt.
+
+NetBox and Nautobot are the two shipped bindings for `inventory_ipam` authority
+enforcement. NetBox retains the existing module-state and optional live API
+behavior. Nautobot checks `/health/` and authenticated access to its IPAM API.
+See the [operation authority contract](../hyops/authority/README.md) for exact
+configuration, provider scope, evidence, and official Nautobot sources.
 
 ### Completion boundary
 
@@ -39,7 +69,10 @@ This distinction was clarified through the Contract Runtime review in
 [#269](https://github.com/hybridops-tech/hybridops-core/issues/269) and the
 resulting [Metal3 community discussion](https://groups.google.com/g/metal3-dev/c/pv9Is4TbQnI?pli=1).
 
-`netbox_live_api_check` notes:
+Legacy `ipam_authority` and `netbox_live_api_check` notes:
+- Existing `requires_authority: netbox` blueprints remain supported through an
+  explicit compatibility translation. New blueprints should use logical
+  authority declarations and requirements.
 - Default: `false` (state-based NetBox authority gate only).
 - When `true`, blueprint preflight/deploy also probes live NetBox API reachability and token validity for steps that require NetBox authority/IPAM.
 - Use this in environments where strict API liveness should block execution early.

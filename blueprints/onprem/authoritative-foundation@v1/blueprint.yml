@@ -12,7 +12,13 @@ metadata:
 policy:
   fail_fast: true
   evidence_required: true
-  ipam_authority: "netbox"
+
+authorities:
+  primary_ipam:
+    capability: "inventory_ipam"
+    provider: "netbox"
+    config:
+      live_check: false
 
 steps:
   - id: network_sdn
@@ -86,9 +92,9 @@ steps:
       - netbox_foundation
     contracts:
       addressing_mode: "ipam"
-      requires_authority: "netbox"
-      requires_module_state_ok:
-        - "platform/onprem/netbox"
+      requires_authority:
+        ref: "primary_ipam"
+        capability: "inventory_ipam"
     inputs:
       require_ipam: true
       template_state_ref: "core/onprem/template-image"
@@ -121,9 +127,9 @@ steps:
       - netbox_foundation
     contracts:
       addressing_mode: "ipam"
-      requires_authority: "netbox"
-      requires_module_state_ok:
-        - "platform/onprem/netbox"
+      requires_authority:
+        ref: "primary_ipam"
+        capability: "inventory_ipam"
 
   - id: custom_platform_vm
     module_ref: "platform/onprem/platform-vm"
@@ -135,8 +141,8 @@ steps:
       - netbox_foundation
     contracts:
       addressing_mode: "ipam"
-      requires_authority: "netbox"
-      requires_module_state_ok:
-        - "platform/onprem/netbox"
+      requires_authority:
+        ref: "primary_ipam"
+        capability: "inventory_ipam"
     inputs:
       require_ipam: true

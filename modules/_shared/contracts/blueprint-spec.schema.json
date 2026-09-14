@@ -59,6 +59,31 @@
         }
       }
     },
+    "authorities": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9_]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/authority"
+      }
+    },
+    "recoverable_secrets": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "access": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "archive_before_destroy": {
+      "type": "object",
+      "additionalProperties": true
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -83,6 +108,14 @@
         "module_ref": {
           "type": "string",
           "pattern": "^[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?$"
+        },
+        "execution_profile": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9@._-]*$"
+        },
+        "state_instance": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
         },
         "action": {
           "type": "string",
@@ -115,8 +148,39 @@
         "skip_if_state_ok": {
           "type": "boolean"
         },
+        "verify_state_on_skip": {
+          "type": "boolean"
+        },
+        "retain_on_destroy": {
+          "type": "boolean"
+        },
+        "destroy_subsumed_by": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "destroy_gate": {
+          "type": "boolean"
+        },
         "optional": {
           "type": "boolean"
+        },
+        "firewall_name": {
+          "type": "string"
+        },
+        "firewall_extra_tcp_ports": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "ssh_source_cidrs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "presentation": {
+          "$ref": "#/$defs/presentation"
         },
         "inputs": {
           "type": "object",
@@ -147,12 +211,81 @@
               "uniqueItems": true
             },
             "requires_authority": {
-              "type": "string",
-              "enum": [
-                "none",
-                "netbox"
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^(none|netbox|[a-z][a-z0-9_]{0,63})$"
+                },
+                {
+                  "$ref": "#/$defs/authorityRequirement"
+                }
               ]
             }
+          }
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "required": [
+        "capability",
+        "provider"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "capability": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        },
+        "config": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "authorityRequirement": {
+      "type": "object",
+      "required": [
+        "ref",
+        "capability"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "capability": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+        }
+      }
+    },
+    "presentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "success": {
+          "type": "string",
+          "minLength": 1
+        },
+        "items_label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }
