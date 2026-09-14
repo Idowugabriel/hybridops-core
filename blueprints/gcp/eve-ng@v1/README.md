@@ -62,6 +62,32 @@ That releases both the VM and the disk. Stopping the instance avoids compute
 charges but leaves the disk billed and the environment outside the HybridOps
 lifecycle; it is not a substitute for a verified archive.
 
+## Private device access
+
+Connect a device management interface to EVE-NG `Cloud8`. The device remains
+private behind the EVE-NG host; no public device address is required.
+
+Start the automation session and keep it running:
+
+```bash
+hyops blueprint access --env <env> --ref gcp/eve-ng@v1 --automation
+```
+
+Use another terminal to inspect and access the discovered targets:
+
+```bash
+hyops blueprint device list --env <env> --ref gcp/eve-ng@v1
+hyops blueprint device edit --env <env> --ref gcp/eve-ng@v1
+hyops blueprint device ssh --env <env> --ref gcp/eve-ng@v1 <device-name>
+hyops blueprint device shell --env <env> --ref gcp/eve-ng@v1
+```
+
+DHCP discovery identifies a device by MAC address and refreshes its current
+management address. Names, SSH users, identity files, platform details and
+other fields set by the operator remain unchanged. Passwords do not belong in
+the target file. Start a new automation session after editing it so generated
+client material uses the updated values.
+
 ## Documentation
 
 - [Operator runbook](https://docs.hybridops.tech/ops/runbooks/platform/blueprints/hyops-blueprint-eve-ng/)
