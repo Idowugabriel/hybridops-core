@@ -32,18 +32,26 @@ class PackResolved:
     stack_dir: Path
 
 
-def _sanitize_rel_path(p: str) -> str:
+def _sanitize_rel_path(p: str, *, field: str = "pack_id") -> str:
     s = (p or "").strip().strip("/")
     if not s:
-        raise PackInvalidError("pack_id is required")
+        raise PackInvalidError(f"{field} is required")
     if "\x00" in s:
-        raise PackInvalidError("pack_id contains invalid characters")
+        raise PackInvalidError(f"{field} contains invalid characters")
 
-    parts = [x for x in s.split("/") if x and x not in (".", "..")]
-    cleaned = "/".join(parts)
+    parts = s.split("/")
+    for part in parts:
+        if not part:
+            continue
+        if part in (".", ".."):
+            raise PackInvalidError(
+                f"{field} must not contain '.' or '..' path segments"
+            )
+
+    cleaned = "/".join(part for part in parts if part)
 
     if not cleaned or cleaned.startswith(("/", "\\")) or ":" in cleaned:
-        raise PackInvalidError("pack_id must be a relative path")
+        raise PackInvalidError(f"{field} must be a relative path")
     return cleaned
 
 
@@ -103,11 +111,8 @@ def resolve_pack_stack(
     packs_root: str | None = None,
     require_stack_files: Iterable[str] = (),
 ) -> PackResolved:
-    dref = (driver_ref or "").strip().strip("/")
-    if not dref:
-        raise PackInvalidError("driver_ref is required")
-
-    pid = _sanitize_rel_path(pack_id)
+    dref = _sanitize_rel_path(driver_ref, field="driver_ref")
+    pid = _sanitize_rel_path(pack_id, field="pack_id")
 
     root = resolve_packs_root(packs_root)
     stack_dir = (root / dref / pid / "stack").resolve()

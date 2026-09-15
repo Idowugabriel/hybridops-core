@@ -8,7 +8,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hyops.runtime.packs import PackNotFoundError, resolve_packs_root
+from hyops.runtime.packs import (
+    PackInvalidError,
+    PackNotFoundError,
+    resolve_pack_stack,
+    resolve_packs_root,
+)
 
 
 class PackRootResolutionTests(unittest.TestCase):
@@ -54,6 +59,45 @@ class PackRootResolutionTests(unittest.TestCase):
 
             with self.assertRaisesRegex(PackNotFoundError, "packs root not found"):
                 resolve_packs_root(str(missing))
+
+
+class PackStackTraversalTests(unittest.TestCase):
+    def test_rejects_dotdot_pack_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "ansible" / "linux" / "stack").mkdir(parents=True)
+
+            with self.assertRaisesRegex(PackInvalidError, "pack_id"):
+                resolve_pack_stack(
+                    driver_ref="config/ansible",
+                    pack_id="../linux",
+                    packs_root=str(root),
+                )
+
+    def test_rejects_dot_segment_in_driver_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "ansible" / "linux" / "stack").mkdir(parents=True)
+
+            with self.assertRaisesRegex(PackInvalidError, "driver_ref"):
+                resolve_pack_stack(
+                    driver_ref="config/./ansible",
+                    pack_id="linux",
+                    packs_root=str(root),
+                )
+
+    def test_keeps_valid_nested_pack_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "config" / "ansible" / "linux" / "nested" / "stack").mkdir(parents=True)
+
+            resolved = resolve_pack_stack(
+                driver_ref="config/ansible",
+                pack_id="linux/nested",
+                packs_root=str(root),
+            )
+            self.assertEqual(resolved.pack_id, "linux/nested")
+            self.assertEqual(resolved.driver_ref, "config/ansible")
 
 
 if __name__ == "__main__":
