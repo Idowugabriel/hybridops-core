@@ -3045,6 +3045,7 @@ def _prepare_automation_access(
         lease_text=lease_text,
         discovery_text=lease_text,
         target_file_override=str(getattr(ns, "targets", "") or ""),
+        trust_scope=new_run_id("device-access"),
     )
     return socks_port, session
 
@@ -3077,6 +3078,7 @@ def _automation_refresher(
             socks_port=socks_port,
             lease_text=lease_text,
             discovery_text=lease_text,
+            trust_scope=str(session.get("trust_scope") or ""),
         )
         added = list(updated.get("new_targets") or [])
         session.clear()
@@ -5027,7 +5029,32 @@ def _select_archive_destroy_mode(ns, payload: dict[str, Any], env_name: str) -> 
             or getattr(ns, "quiesce_timeout", None) is not None
         ):
             raise ValueError("this blueprint does not declare a lab archive lifecycle")
-        return "none"
+        destroy_gate = any(
+            bool(step.get("destroy_gate", False))
+            for step in payload.get("steps", [])
+            if isinstance(step, dict)
+        )
+        if not destroy_gate:
+            return "none"
+        if bool(getattr(ns, "yes", False)):
+            return "protected"
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            raise ValueError("non-interactive blueprint destroy requires --yes")
+
+        print("recovery state:")
+        print("  1. Keep the environment running")
+        print("  2. Preserve declared recovery state, verify, then destroy")
+        choices = {"1": "keep", "2": "protected"}
+        while True:
+            try:
+                answer = input("Choose [1-2]: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return "cancel"
+            selected = choices.get(answer)
+            if selected is not None:
+                return selected
+            print("invalid choice; enter exactly 1 or 2")
 
     if bool(getattr(ns, "archive_before_destroy", False)):
         return "archive"
@@ -5573,7 +5600,7 @@ def _run_destroy_unlocked(ns) -> int:
             setattr(ns, "guest_quiesced", True)
 
     if not bool(getattr(ns, "yes", False)) and not json_mode:
-        if payload.get("archive_before_destroy"):
+        if payload.get("archive_before_destroy") or archive_mode == "protected":
             if _confirm_archive_destroy(env_name) is not True:
                 print("destroy cancelled")
                 print("environment retained")

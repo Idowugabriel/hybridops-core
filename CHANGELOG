@@ -6,6 +6,13 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Added
 
+- Added checksum-verified loading of operator-supplied Containerlab image
+  archives when their expected images are absent from a managed host.
+- Added managed-host Containerlab builds for operator-supplied Cisco IOL-XE
+  binaries and supported OCI archives using a pinned vrnetlab revision, with
+  structural validation before build.
+- Added standard CML folder discovery for local IOL-XE image type, version,
+  checksum, build tag and verification inputs.
 - Added runtime-secret resolution for additional EVE-NG user passwords while
   retaining the existing plaintext input for compatibility.
 - Added a provider-neutral operation authority contract with typed logical
@@ -16,8 +23,8 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Changed
 
-- Pinned `hybridops.app` to `0.1.11` for secret-safe additional EVE-NG user
-  handling.
+- Pinned `hybridops.app` to `0.1.12` for secret-safe additional EVE-NG user
+  handling, authorised Containerlab image intake and native lab-state recovery.
 - Made the authoritative-foundation blueprint use the logical
   `primary_ipam` authority while retaining the existing NetBox-specific syntax
   as an explicit compatibility form.
@@ -29,6 +36,14 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Fixed
 
+- Preserved and restored inspected Containerlab native lab-directory state so
+  Cisco IOL NVRAM survives disposable-host reconstruction.
+- Scoped private device SSH trust to each automation access session so rebuilt
+  lab nodes can reuse management addresses without inheriting stale host keys.
+- Replaced the generic confirmation for destroy-gated blueprints with an
+  explicit choice between retention and verified recovery, followed by an exact
+  typed confirmation before destroy.
+- Revalidated SSH after Docker installation on fresh Containerlab hosts.
 - Suppressed Python tracebacks when an operator cancels installation with
   `Ctrl-C`; transactional cleanup and exit status 130 are preserved.
 

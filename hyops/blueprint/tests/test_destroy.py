@@ -572,6 +572,69 @@ class ResumableBlueprintDestroyTest(TestCase):
         with self.assertRaisesRegex(ValueError, "does not declare"):
             _select_archive_destroy_mode(ns, _payload(), "test")
 
+    def test_destroy_gate_offers_protected_release(self):
+        ns = _namespace()
+        ns.yes = False
+        payload = _payload()
+        payload["steps"][-1]["destroy_gate"] = True
+
+        with (
+            patch("hyops.blueprint.command.sys.stdin.isatty", return_value=True),
+            patch("hyops.blueprint.command.sys.stdout.isatty", return_value=True),
+            patch("hyops.blueprint.command.input", return_value="2"),
+            patch("builtins.print") as output,
+        ):
+            selected = _select_archive_destroy_mode(ns, payload, "test")
+
+        self.assertEqual(selected, "protected")
+        output.assert_any_call("  1. Keep the environment running")
+        output.assert_any_call(
+            "  2. Preserve declared recovery state, verify, then destroy"
+        )
+
+    def test_destroy_gate_yes_selects_protected_release(self):
+        payload = _payload()
+        payload["steps"][-1]["destroy_gate"] = True
+
+        self.assertEqual(
+            _select_archive_destroy_mode(_namespace(), payload, "test"),
+            "protected",
+        )
+
+    def test_interactive_destroy_gate_requires_typed_confirmation(self):
+        ns = _namespace()
+        ns.yes = False
+        paths = SimpleNamespace(
+            state_dir=Path("/tmp/state"),
+            root=SimpleNamespace(name="test"),
+        )
+        payload = _payload()
+        payload["steps"][-1]["destroy_gate"] = True
+
+        with (
+            patch("hyops.blueprint.command._resolve_and_validate", return_value=payload),
+            patch("hyops.blueprint.command.require_runtime_selection"),
+            patch("hyops.blueprint.command.resolve_runtime_paths", return_value=paths),
+            patch("hyops.blueprint.command.ensure_layout"),
+            patch("hyops.blueprint.command.require_runtime_writable"),
+            patch("hyops.blueprint.command._enforce_runtime_blueprint_file_scope"),
+            patch("hyops.blueprint.command.module_state_status", return_value="ok"),
+            patch(
+                "hyops.blueprint.command._select_archive_destroy_mode",
+                return_value="protected",
+            ),
+            patch(
+                "hyops.blueprint.command._confirm_archive_destroy",
+                return_value=None,
+            ) as confirmation,
+            patch("hyops.blueprint.command.run_step_module_command") as command,
+        ):
+            rc = run_destroy(ns)
+
+        self.assertEqual(rc, CANCELLED)
+        confirmation.assert_called_once_with("test")
+        command.assert_not_called()
+
     def test_archive_choice_reprompts_until_an_exact_selection(self):
         ns = _namespace()
         ns.yes = False

@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest import TestCase
 
+import yaml
+
 from hyops.blueprint.schema import load_blueprint, validate_blueprint
 
 
@@ -38,6 +40,10 @@ class GCPContainerlabBlueprintTest(TestCase):
         self.assertEqual(lab["containerlab_lab_topology_relpath"], "lab.clab.yml")
         self.assertEqual(lab["containerlab_lab_required_images"], [])
         self.assertFalse(lab["containerlab_lab_pull_missing_images"])
+        self.assertEqual(lab["containerlab_lab_local_image_archives"], [])
+        self.assertEqual(lab["containerlab_lab_local_image_dir"], "")
+        self.assertFalse(lab["containerlab_lab_local_image_dir_authorised_use"])
+        self.assertEqual(lab["containerlab_lab_local_image_builds"], [])
         self.assertTrue(lab["containerlab_lab_restore_latest"])
 
     def test_source_tree_is_separate_from_native_generated_labdir(self) -> None:
@@ -73,7 +79,7 @@ class GCPContainerlabBlueprintTest(TestCase):
             inputs["containerlab_recovery_source_root"],
             "/var/lib/hybridops/containerlab/labs/gcp-containerlab",
         )
-        self.assertFalse(inputs["containerlab_recovery_include_lab_dir"])
+        self.assertTrue(inputs["containerlab_recovery_include_lab_dir"])
 
     def test_destroy_gate_cannot_be_optional(self) -> None:
         spec = load_blueprint(self.path)
@@ -106,3 +112,15 @@ class GCPContainerlabBlueprintTest(TestCase):
         self.assertEqual(automation["discovery_mode"], "containerlab-inspect")
         self.assertEqual(automation["management_cidr"], "172.20.20.0/24")
         self.assertEqual(automation["management_gateway"], "172.20.20.1")
+
+    def test_iol_example_is_self_contained(self) -> None:
+        example_root = self.path.parent / "examples" / "two-node-iol"
+        topology = yaml.safe_load(
+            (example_root / "lab.clab.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            topology["topology"]["kinds"]["cisco_iol"]["image"],
+            "${HYOPS_CONTAINERLAB_IOL_L3_IMAGE}",
+        )
+        for node in topology["topology"]["nodes"].values():
+            self.assertTrue((example_root / node["startup-config"]).is_file())

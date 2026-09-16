@@ -47,11 +47,29 @@ class ContainerlabModuleContractTest(TestCase):
         self.assertEqual(defaults["containerlab_lab_topology_relpath"], "lab.clab.yml")
         self.assertEqual(defaults["containerlab_lab_required_images"], [])
         self.assertFalse(defaults["containerlab_lab_pull_missing_images"])
+        self.assertEqual(defaults["containerlab_lab_local_image_archives"], [])
+        self.assertEqual(defaults["containerlab_lab_local_image_dir"], "")
+        self.assertFalse(defaults["containerlab_lab_local_image_dir_authorised_use"])
+        self.assertEqual(defaults["containerlab_lab_local_image_builds"], [])
+        self.assertEqual(
+            defaults["containerlab_lab_image_cache_dir"],
+            "/var/cache/hybridops/containerlab/images",
+        )
+        self.assertEqual(
+            defaults["containerlab_lab_image_build_root"],
+            "/var/cache/hybridops/containerlab/builds",
+        )
+        self.assertRegex(
+            defaults["containerlab_lab_vrnetlab_revision"],
+            r"^[0-9a-f]{40}$",
+        )
         self.assertFalse(defaults["containerlab_lab_restore_latest"])
         self.assertEqual(
             defaults["containerlab_lab_recovery_role_fqcn"],
             "hybridops.app.containerlab_recovery",
         )
+        self.assertIn("containerlab_lab_local_images", spec["outputs"]["publish"])
+        self.assertIn("containerlab_lab_built_images", spec["outputs"]["publish"])
 
     def test_recovery_publishes_destroy_gate(self) -> None:
         spec = self._spec("containerlab-recovery")
@@ -155,4 +173,8 @@ class ContainerlabModuleContractTest(TestCase):
         path = self.root / "tools" / "setup" / "requirements" / "ansible.hybridops.git.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
         app = next(item for item in payload["collections"] if item["name"] == "hybridops.app")
-        self.assertEqual(app["ref"], "8d7873dedba896d3b49055b32f915b72be02856a")
+        self.assertEqual(
+            app["repo"],
+            "https://github.com/hybridops-tech/ansible-collection-app.git",
+        )
+        self.assertEqual(app["ref"], "d42265fb28a56cdc3df0e1791f42ab5dc049a4ad")

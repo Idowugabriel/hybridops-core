@@ -21,7 +21,30 @@ The executable contract is [blueprint.yml](blueprint.yml). Initialise an environ
 hyops blueprint init --env <env> --ref gcp/containerlab@v1 --edit
 ```
 
-Container images remain native references in the topology. The blueprint can verify declared references and optionally permit registry pulls. Licence material remains in its authorised source and must not be embedded in the public blueprint.
+Container images remain native references in the topology. The blueprint can
+verify declared references, permit registry pulls, load an authorised image
+archive, or build an operator-supplied 64-bit Cisco IOL-XE binary or supported
+OCI archive on the managed host through a pinned vrnetlab revision. Licence
+material remains outside the public blueprint.
+
+The examples include [a two-node Cisco IOL topology](examples/two-node-iol/lab.clab.yml)
+with partial startup configurations. Directory discovery binds its image
+reference to the single discovered L3 image.
+
+## Access and recovery
+
+Private host access and direct node automation are exposed through the
+`hyops blueprint access` command. Save device changes to native startup
+configuration before recovery. During protected destroy, the recovery gate
+requests Containerlab's supported configuration export and retains the
+inspected native lab directory with the declared source tree. The recovery set
+is copied off the host and verified before compute release. The next deployment
+restores the latest verified set. `hyops blueprint rebuild` performs those
+phases as one operation.
+
+Containerlab provides optional VS Code, desktop and web interfaces. The desktop
+and web interfaces require `clab-api-server`; this blueprint does not install or
+expose that service.
 
 ## Documentation
 
