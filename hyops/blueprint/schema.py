@@ -25,6 +25,12 @@ from .constants import (
 
 AUTHORITY_REF_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 AUTHORITY_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+STEP_KEYS = {
+    "id", "module_ref", "execution_profile", "action", "phase", "requires",
+    "with_deps", "skip_if_state_ok", "verify_state_on_skip", "retain_on_destroy",
+    "destroy_gate", "destroy_subsumed_by", "optional", "inputs", "inputs_file",
+    "state_instance", "presentation", "contracts",
+}
 
 
 def resolve_blueprint_file(ref: str, file_path: str, blueprints_root: Path) -> Path:
@@ -480,6 +486,11 @@ def validate_blueprint(spec: dict[str, Any], path: Path) -> dict[str, Any]:
         step_id = as_non_empty_string(step.get("id"), f"steps[{idx}].id")
         if not STEP_ID_RE.fullmatch(step_id):
             raise ValueError(f"steps[{idx}].id has invalid format: {step_id!r}")
+        unknown = sorted(str(key) for key in step if key not in STEP_KEYS)
+        if unknown:
+            raise ValueError(
+                f"steps[{idx}] ({step_id!r}) has unknown keys: {', '.join(unknown)}"
+            )
         if step_id in step_ids:
             raise ValueError(f"duplicate step id: {step_id}")
         step_ids.add(step_id)
