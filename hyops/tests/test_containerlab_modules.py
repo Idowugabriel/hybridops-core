@@ -27,6 +27,19 @@ class ContainerlabModuleContractTest(TestCase):
         defaults = spec["inputs"]["defaults"]
         self.assertEqual(defaults["containerlab_healthcheck_expected_version"], "0.78.0")
 
+    def test_gui_uses_pinned_official_images(self) -> None:
+        spec = self._spec("containerlab-gui")
+        defaults = spec["inputs"]["defaults"]
+        self.assertEqual(
+            defaults["containerlab_gui_api_image"],
+            "ghcr.io/srl-labs/clab-api-server/clab-api-server:v0.6.0",
+        )
+        self.assertEqual(
+            defaults["containerlab_gui_web_image"],
+            "ghcr.io/srl-labs/containerlab-web:0.2.2",
+        )
+        self.assertEqual(defaults["containerlab_gui_web_port"], 3001)
+
     def test_native_labdir_contract_is_shared_and_separate_from_source(self) -> None:
         lab = self._spec("containerlab-lab")["inputs"]["defaults"]
         health = self._spec("containerlab-healthcheck")["inputs"]["defaults"]
@@ -47,6 +60,8 @@ class ContainerlabModuleContractTest(TestCase):
         self.assertEqual(defaults["containerlab_lab_topology_relpath"], "lab.clab.yml")
         self.assertEqual(defaults["containerlab_lab_required_images"], [])
         self.assertFalse(defaults["containerlab_lab_pull_missing_images"])
+        self.assertEqual(defaults["containerlab_lab_remote_owner"], "root")
+        self.assertTrue(defaults["containerlab_lab_destroy_all"])
         self.assertEqual(defaults["containerlab_lab_local_image_archives"], [])
         self.assertEqual(defaults["containerlab_lab_local_image_dir"], "")
         self.assertFalse(defaults["containerlab_lab_local_image_dir_authorised_use"])
@@ -131,7 +146,12 @@ class ContainerlabModuleContractTest(TestCase):
         self.assertIn("_containerlab_recovery_controller_dir:", recovery_destroy)
         self.assertNotIn("\n        containerlab_recovery_action: export", recovery_destroy)
         self.assertIn("_containerlab_lab_action: destroy", lab_destroy)
-        self.assertIn("_containerlab_lab_destroy_all: true", lab_destroy)
+        self.assertIn(
+            '_containerlab_lab_destroy_all: "{{ _hyops_destroy_all }}"',
+            lab_destroy,
+        )
+        self.assertIn('containerlab_lab_source_dir: ""', lab_destroy)
+        self.assertIn("Stop when scoped local cleanup fails", lab_destroy)
         self.assertNotIn("\n            containerlab_lab_action: destroy", lab_destroy)
         self.assertIn("_containerlab_recovery_action: import", lab_apply)
 
@@ -154,6 +174,8 @@ class ContainerlabModuleContractTest(TestCase):
                 ("62-containerlab-healthcheck@v1.0", "playbook.yml"),
                 ("63-containerlab-recovery@v1.0", "playbook.yml"),
                 ("63-containerlab-recovery@v1.0", "destroy.playbook.yml"),
+                ("64-containerlab-gui@v1.0", "playbook.yml"),
+                ("64-containerlab-gui@v1.0", "destroy.playbook.yml"),
             )
         ]
         direct_self_binding = re.compile(
@@ -177,4 +199,4 @@ class ContainerlabModuleContractTest(TestCase):
             app["repo"],
             "https://github.com/hybridops-tech/ansible-collection-app.git",
         )
-        self.assertEqual(app["ref"], "d42265fb28a56cdc3df0e1791f42ab5dc049a4ad")
+        self.assertEqual(app["ref"], "76263c900254c13bbcaa74a1c6616a1a88aadfca")

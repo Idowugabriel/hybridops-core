@@ -25,6 +25,7 @@ from hyops.blueprint.command import (
     _device_process_environment,
     _device_web_requests,
     _read_automation_leases,
+    _read_local_automation_state,
     run_device,
 )
 from hyops.blueprint.schema import load_blueprint, validate_blueprint
@@ -110,6 +111,114 @@ class AutomationAccessTests(unittest.TestCase):
             "sudo -n containerlab inspect --all -f json",
         )
 
+    def test_containerlab_discovery_can_be_scoped_to_one_topology(self) -> None:
+        result = SimpleNamespace(returncode=0, stdout='{"demo": []}')
+        automation = {
+            "discovery_mode": "containerlab-inspect",
+            "management_cidr": "172.20.20.0/24",
+            "discovery_topology_path": "/var/lib/hybridops/containerlab/labs/opsadmin/demo/lab.clab.yml",
+        }
+
+        with patch(
+            "hyops.blueprint.command.subprocess.run",
+            return_value=result,
+        ) as run:
+            output = _read_automation_leases(
+                ["ssh", "-F", "/tmp/ssh_config"],
+                "gateway",
+                automation,
+            )
+
+        self.assertEqual(output, result.stdout)
+        self.assertEqual(
+            run.call_args.args[0][-1],
+            "sudo -n containerlab inspect -t "
+            "/var/lib/hybridops/containerlab/labs/opsadmin/demo/lab.clab.yml "
+            "-f json",
+        )
+
+    def test_local_containerlab_discovery_is_scoped_to_one_topology(self) -> None:
+        result = SimpleNamespace(returncode=0, stdout='{"demo": []}', stderr="")
+        automation = {
+            "discovery_mode": "containerlab-inspect",
+            "management_cidr": "172.20.20.0/24",
+            "discovery_topology_path": "/srv/labs/${USER}/demo/lab.clab.yml",
+        }
+
+        with (
+            patch.dict("hyops.blueprint.command.os.environ", {"USER": "operator"}),
+            patch("hyops.blueprint.command.Path.is_file", return_value=True),
+            patch("hyops.blueprint.command.shutil.which", return_value="/usr/bin/containerlab"),
+            patch("hyops.blueprint.command.subprocess.run", return_value=result) as run,
+        ):
+            output = _read_local_automation_state(automation)
+
+        self.assertEqual(output, result.stdout)
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/usr/bin/containerlab",
+                "inspect",
+                "-t",
+                "/srv/labs/operator/demo/lab.clab.yml",
+                "-f",
+                "json",
+            ],
+        )
+
+    def test_local_containerlab_discovery_requires_managed_topology(self) -> None:
+        automation = {
+            "discovery_mode": "containerlab-inspect",
+            "management_cidr": "172.20.20.0/24",
+            "discovery_topology_path": "/srv/labs/${USER}/demo/lab.clab.yml",
+        }
+
+        with (
+            patch.dict("hyops.blueprint.command.os.environ", {"USER": "operator"}),
+            patch("hyops.blueprint.command.Path.is_file", return_value=False),
+            patch("hyops.blueprint.command.shutil.which", return_value="/usr/bin/containerlab"),
+        ):
+            with self.assertRaisesRegex(ValueError, "topology is unavailable"):
+                _read_local_automation_state(automation)
+
+    def test_local_containerlab_discovery_uses_configured_docker_group(self) -> None:
+        denied = SimpleNamespace(returncode=1, stdout="", stderr="denied")
+        allowed = SimpleNamespace(returncode=0, stdout='{"demo": []}', stderr="")
+        automation = {
+            "discovery_mode": "containerlab-inspect",
+            "management_cidr": "172.20.20.0/24",
+            "discovery_topology_path": "/srv/labs/operator/demo/lab.clab.yml",
+        }
+
+        with (
+            patch("hyops.blueprint.command.Path.is_file", return_value=True),
+            patch(
+                "hyops.blueprint.command.shutil.which",
+                side_effect=lambda name: f"/usr/bin/{name}",
+            ),
+            patch(
+                "hyops.blueprint.command._configured_supplementary_group",
+                return_value=True,
+            ),
+            patch(
+                "hyops.blueprint.command.subprocess.run",
+                side_effect=[denied, allowed],
+            ) as run,
+        ):
+            output = _read_local_automation_state(automation)
+
+        self.assertEqual(output, allowed.stdout)
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            [
+                "/usr/bin/sg",
+                "docker",
+                "-c",
+                "/usr/bin/containerlab inspect -t "
+                "/srv/labs/operator/demo/lab.clab.yml -f json",
+            ],
+        )
+
     def test_session_writes_ssh_vscode_and_inventory_material(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -145,6 +254,10 @@ class AutomationAccessTests(unittest.TestCase):
             environment = _device_process_environment(session)
             self.assertEqual(environment["ANSIBLE_CONFIG"], str(session["ansible_config"]))
             self.assertEqual(
+                environment["HYOPS_SOCKS_PROXY"],
+                "socks5h://127.0.0.1:1080",
+            )
+            self.assertEqual(
                 environment["NORNIR_SSH_CONFIG_FILE"],
                 str(session["ssh_config"]),
             )
@@ -154,6 +267,57 @@ class AutomationAccessTests(unittest.TestCase):
             )
             target_payload = yaml.safe_load(session["target_file"].read_text())
             self.assertEqual(target_payload["targets"][0]["host"], "172.29.128.51")
+
+    def test_direct_session_has_no_gateway_or_proxy(self) -> None:
+        automation = dict(
+            self.automation,
+            discovery_mode="containerlab-inspect",
+            management_network_label="clab",
+            management_cidr="172.20.20.0/24",
+            management_gateway="172.20.20.1",
+            management_dhcp_range="",
+            lease_file="",
+        )
+        discovery = json.dumps(
+            {
+                "demo": [
+                    {
+                        "name": "clab-demo-r1",
+                        "kind": "cisco_iol",
+                        "ipv4_address": "172.20.20.2/24",
+                    }
+                ]
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session = prepare_automation_session(
+                paths=SimpleNamespace(root=root, config_dir=root / "config"),
+                blueprint_ref="linux/containerlab@v1",
+                env_name="containerlab-local",
+                automation=automation,
+                gateway=None,
+                discovery_text=discovery,
+                direct=True,
+            )
+
+            ssh_config = session["ssh_config"].read_text(encoding="utf-8")
+            self.assertNotIn("ProxyJump", ssh_config)
+            self.assertIn("HostName 172.20.20.2", ssh_config)
+            self.assertEqual(session["access_mode"], "direct")
+            self.assertEqual(session["socks_proxy"], "")
+            with patch.dict(
+                "hyops.blueprint.command.os.environ",
+                {
+                    "HYOPS_SOCKS_PROXY": "socks5h://127.0.0.1:9999",
+                    "ALL_PROXY": "socks5h://127.0.0.1:9999",
+                    "all_proxy": "socks5h://127.0.0.1:9999",
+                },
+            ):
+                environment = _device_process_environment(session)
+            self.assertNotIn("HYOPS_SOCKS_PROXY", environment)
+            self.assertNotIn("ALL_PROXY", environment)
+            self.assertNotIn("all_proxy", environment)
 
     def test_device_trust_is_scoped_to_the_access_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -323,6 +487,88 @@ class AutomationAccessTests(unittest.TestCase):
             self.assertEqual(by_name["static-fw"]["host"], "172.29.128.80")
             self.assertEqual(by_name["r2"]["source"], "dhcp-lease")
             self.assertEqual(refreshed["new_targets"], ["r2"])
+
+    def test_containerlab_refresh_replaces_stale_discovered_targets(self) -> None:
+        automation = dict(
+            self.automation,
+            discovery_mode="containerlab-inspect",
+            management_network_label="clab",
+            management_cidr="172.20.20.0/24",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = SimpleNamespace(
+                root=Path(tmp),
+                config_dir=Path(tmp) / "config",
+            )
+            first = prepare_automation_session(
+                paths=paths,
+                blueprint_ref="linux/containerlab@v1",
+                env_name="local-lab",
+                automation=automation,
+                gateway=None,
+                discovery_text=json.dumps(
+                    {
+                        "linux": [
+                            {
+                                "name": "clab-linux-leaf1",
+                                "kind": "linux",
+                                "ipv4_address": "172.20.20.2/24",
+                            },
+                            {
+                                "name": "clab-linux-leaf2",
+                                "kind": "linux",
+                                "ipv4_address": "172.20.20.3/24",
+                            },
+                        ]
+                    }
+                ),
+                direct=True,
+            )
+            payload = yaml.safe_load(first["target_file"].read_text())
+            payload["targets"].append(
+                {
+                    "name": "static-service",
+                    "host": "172.20.20.80",
+                    "user": "operator",
+                }
+            )
+            first["target_file"].write_text(yaml.safe_dump(payload), encoding="utf-8")
+
+            refreshed = prepare_automation_session(
+                paths=paths,
+                blueprint_ref="linux/containerlab@v1",
+                env_name="local-lab",
+                automation=automation,
+                gateway=None,
+                discovery_text=json.dumps(
+                    {
+                        "iol": [
+                            {
+                                "name": "clab-iol-r1",
+                                "kind": "cisco_iol",
+                                "ipv4_address": "172.20.20.2/24",
+                            },
+                            {
+                                "name": "clab-iol-r2",
+                                "kind": "cisco_iol",
+                                "ipv4_address": "172.20.20.3/24",
+                            },
+                        ]
+                    }
+                ),
+                direct=True,
+            )
+
+            by_name = {item["name"]: item for item in refreshed["targets"]}
+            self.assertEqual(
+                set(by_name),
+                {"clab-iol-r1", "clab-iol-r2", "static-service"},
+            )
+            self.assertEqual(by_name["clab-iol-r1"]["platform"], "cisco_iol")
+            self.assertEqual(
+                refreshed["new_targets"],
+                ["clab-iol-r1", "clab-iol-r2"],
+            )
 
     def test_device_list_shows_default_user_and_port(self) -> None:
         targets = [

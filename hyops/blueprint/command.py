@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import errno
+import getpass
 import hashlib
 import ipaddress
 import json
@@ -96,6 +97,7 @@ from .schema import load_blueprint, resolve_blueprint_file, validate_blueprint
 
 
 _PROJECT_SUPPORT_URL = "https://github.com/sponsors/hybridops-tech"
+_CONTAINERLAB_LAB_MODULE_REF = "platform/linux/containerlab-lab"
 _QUIESCENCE_DRAFT_MARKER = "HYOPS_QUIESCENCE_ACTION_NOT_CONFIGURED"
 _QUIESCENCE_TEMPLATE = """#!/bin/sh
 set -eu
@@ -1543,6 +1545,53 @@ def _run_device_web(
             _stop_process(session["proc"])
 
 
+def _run_direct_device_web(
+    ns,
+    *,
+    automation: dict[str, Any],
+    targets: list[dict[str, Any]],
+) -> int:
+    requests = _device_web_requests(ns, automation, targets)
+    urls = [
+        (
+            request["label"],
+            f"{request['scheme']}://{request['address']}:{request['remote_port']}"
+            f"{request['path']}",
+        )
+        for request in requests
+    ]
+    if len(urls) == 1:
+        print(f"device web access: {urls[0][0]}")
+        print(f"URL: {urls[0][1]}")
+    else:
+        print(f"device web access: {len(urls)} targets")
+        for label, url in urls:
+            print(f"- {label}  {url}")
+    open_all = bool(getattr(ns, "open_all", False))
+    no_browser = bool(getattr(ns, "no_browser", False))
+    if len(urls) > 1 and not no_browser and not open_all:
+        print("browser: not opened; use --open-all to open every URL")
+    if not no_browser and (len(urls) == 1 or open_all):
+        for _label, url in urls:
+            open_operator_url(url)
+    return 0
+
+
+def _device_access_mode(material: dict[str, Any]) -> str:
+    raw_path = material.get("session_file")
+    if not raw_path:
+        return "proxy"
+    path = Path(raw_path)
+    if not path.is_file():
+        return "proxy"
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return "proxy"
+    mode = str(payload.get("access_mode") or "proxy").strip().lower()
+    return mode if mode in {"direct", "proxy"} else "proxy"
+
+
 def _device_process_environment(material: dict[str, Any]) -> dict[str, str]:
     required = {
         "SSH configuration": Path(material["ssh_config"]),
@@ -1579,8 +1628,13 @@ def _device_process_environment(material: dict[str, Any]) -> dict[str, str]:
         }
     )
     if proxy:
+        environment["HYOPS_SOCKS_PROXY"] = proxy
         environment["ALL_PROXY"] = proxy
         environment["all_proxy"] = proxy
+    else:
+        environment.pop("HYOPS_SOCKS_PROXY", None)
+        environment.pop("ALL_PROXY", None)
+        environment.pop("all_proxy", None)
     return environment
 
 
@@ -1635,23 +1689,24 @@ def run_device(ns) -> int:
         if not ssh:
             raise ValueError("ssh is required; run: hyops setup base")
 
+        access_mode = _device_access_mode(material)
+
         if action == "ping":
             count = int(getattr(ns, "count", 3) or 3)
             if not 1 <= count <= 20:
                 raise ValueError("--count must be between 1 and 20")
             address, _target = _resolve_device_target(ns.target, automation, targets)
-            result = subprocess.run(
-                [
+            command = ["ping", "-c", str(count), "--", address]
+            if access_mode != "direct":
+                command = [
                     ssh,
                     "-F",
                     str(ssh_config),
                     str(material["gateway_alias"]),
-                    "ping",
-                    "-c",
-                    str(count),
-                    "--",
-                    address,
-                ],
+                    *command,
+                ]
+            result = subprocess.run(
+                command,
                 cwd=str(Path.home()),
                 check=False,
             )
@@ -1685,6 +1740,12 @@ def run_device(ns) -> int:
                 print(f"edit: {_device_edit_command(ns)}")
             return int(result.returncode)
         if action == "web":
+            if access_mode == "direct":
+                return _run_direct_device_web(
+                    ns,
+                    automation=automation,
+                    targets=targets,
+                )
             return _run_device_web(
                 ns,
                 ssh=ssh,
@@ -2983,11 +3044,20 @@ def _read_automation_leases(
     automation: dict[str, Any],
 ) -> str:
     if automation.get("discovery_mode") == "containerlab-inspect":
+        topology_path = str(
+            automation.get("discovery_topology_path") or ""
+        ).strip()
+        inspect_command = "sudo -n containerlab inspect"
+        if topology_path:
+            inspect_command += f" -t {shlex.quote(topology_path)}"
+        else:
+            inspect_command += " --all"
+        inspect_command += " -f json"
         result = subprocess.run(
             [
                 *ssh_base,
                 ssh_target,
-                "sudo -n containerlab inspect --all -f json",
+                inspect_command,
             ],
             cwd=str(Path.home()),
             text=True,
@@ -3013,6 +3083,115 @@ def _read_automation_leases(
         check=False,
     )
     return result.stdout if result.returncode == 0 else ""
+
+
+def _read_local_automation_state(automation: dict[str, Any]) -> str:
+    if automation.get("discovery_mode") != "containerlab-inspect":
+        lease_file = str(automation.get("lease_file") or "").strip()
+        if not lease_file:
+            return ""
+        try:
+            return Path(lease_file).read_text(encoding="utf-8")
+        except OSError:
+            return ""
+
+    containerlab = shutil.which("containerlab")
+    if not containerlab:
+        raise ValueError("containerlab is unavailable; deploy the blueprint first")
+    topology_path = str(
+        automation.get("discovery_topology_path") or ""
+    ).strip()
+    if topology_path:
+        topology_path = os.path.expanduser(topology_path)
+        if "${USER}" in topology_path:
+            topology_path = topology_path.replace(
+                "${USER}", os.environ.get("USER") or getpass.getuser()
+            )
+        topology_path = os.path.expandvars(topology_path)
+        if not Path(topology_path).is_file():
+            raise ValueError(
+                f"Containerlab topology is unavailable: {topology_path}; "
+                "deploy the blueprint first"
+            )
+    inspect_args = [containerlab, "inspect"]
+    if topology_path:
+        inspect_args.extend(["-t", topology_path])
+    else:
+        inspect_args.append("--all")
+    inspect_args.extend(["-f", "json"])
+    commands = [inspect_args]
+    sg = shutil.which("sg")
+    if sg and _configured_supplementary_group("docker"):
+        commands.append([sg, "docker", "-c", shlex.join(inspect_args)])
+    commands.append(["sudo", "-n", *inspect_args])
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(Path.home()),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0:
+            return result.stdout
+    sudo = shutil.which("sudo")
+    if sudo and sys.stdin and sys.stdin.isatty():
+        refreshed = subprocess.run([sudo, "-v"], check=False)
+        if refreshed.returncode == 0:
+            result = subprocess.run(
+                [sudo, "-n", *inspect_args],
+                cwd=str(Path.home()),
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+                check=False,
+            )
+            if result.returncode == 0:
+                return result.stdout
+    raise ValueError(
+        "Containerlab runtime state is not readable by the current user; "
+        "start a new shell after deployment, then retry"
+    )
+
+
+def _configured_supplementary_group(name: str) -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        import grp
+
+        configured = grp.getgrnam(name)
+    except (ImportError, KeyError):
+        return False
+    return getpass.getuser() in configured.gr_mem
+
+
+def _prepare_local_automation_access(
+    *,
+    ns,
+    payload: dict[str, Any],
+    paths,
+    automation: dict[str, Any],
+) -> dict[str, Any]:
+    discovery_text = _read_local_automation_state(automation)
+    return prepare_automation_session(
+        paths=paths,
+        blueprint_ref=str(payload.get("blueprint_ref") or "blueprint"),
+        env_name=str(getattr(ns, "env", "") or Path(paths.root).name),
+        automation=automation,
+        gateway=None,
+        lease_text=discovery_text,
+        discovery_text=discovery_text,
+        target_file_override=str(getattr(ns, "targets", "") or ""),
+        trust_scope=new_run_id("device-access"),
+        direct=True,
+    )
 
 
 def _prepare_automation_access(
@@ -3106,8 +3285,11 @@ def _print_automation_access(
     else:
         print("device discovery: watching management-network DHCP leases")
     print("device commands: hyops blueprint device --help")
+    if session.get("access_mode") == "direct":
+        print("device access: direct")
     if verbose_enabled():
-        print(f"device proxy: {session['socks_proxy']}")
+        if session.get("socks_proxy"):
+            print(f"device proxy: {session['socks_proxy']}")
         print(f"static target overrides: {session['target_file']}")
         print(f"SSH and VS Code config: {session['ssh_config']}")
         print(f"automation inventory: {session['inventory']}")
@@ -3439,6 +3621,38 @@ def _combine_maintenance(
     return run
 
 
+def _run_local_linux_access(
+    *,
+    ns,
+    payload: dict[str, Any],
+    paths,
+    access: dict[str, Any],
+) -> int:
+    host = str(access.get("host") or "").strip()
+    if host not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("linux-host-http currently requires a local Linux or WSL host")
+    scheme = str(access.get("scheme") or "http").strip()
+    remote_port = int(access.get("remote_port") or 80)
+    path = str(access.get("path") or "/")
+    url_host = "[::1]" if host == "::1" else "127.0.0.1"
+    url = f"{scheme}://{url_host}:{remote_port}{path}"
+    automation = _automation_settings(access, ns)
+    if automation:
+        session = _prepare_local_automation_access(
+            ns=ns,
+            payload=payload,
+            paths=paths,
+            automation=automation,
+        )
+        _print_automation_access(automation, session)
+    print("opening local Containerlab access")
+    print(f"URL: {url}")
+    open_browser = bool(access.get("open_browser", True))
+    if open_browser and not bool(getattr(ns, "no_browser", False)):
+        open_operator_url(url)
+    return 0
+
+
 def run_access(ns) -> int:
     native_console_stop: Callable[[], None] | None = None
     session_record: dict[str, Any] | None = None
@@ -3451,6 +3665,14 @@ def run_access(ns) -> int:
             raise ValueError("blueprint does not declare an access path")
         require_runtime_selection(ns.root, getattr(ns, "env", None), command_label="hyops blueprint access")
         paths = resolve_runtime_paths(ns.root, getattr(ns, "env", None))
+        access_type = str(access.get("type") or "").strip()
+        if access_type == "linux-host-http":
+            return _run_local_linux_access(
+                ns=ns,
+                payload=payload,
+                paths=paths,
+                access=access,
+            )
         state_ref = str(access.get("state_ref") or "").strip()
         module_ref, state_instance = split_module_state_ref(state_ref)
         state = read_module_state(paths.state_dir, module_ref, state_instance=state_instance)
@@ -3476,8 +3698,8 @@ def run_access(ns) -> int:
         vm = next(iter(vms.values()))
         if not isinstance(vm, dict):
             raise ValueError(f"VM output is invalid in state {state_ref}")
-        access_type = str(access.get("type") or "").strip()
         remote_port = int(access.get("remote_port") or 80)
+        scheme = str(access.get("scheme") or "http").strip()
         path = str(access.get("path") or "/")
         automation = _automation_settings(access, ns)
 
@@ -3488,7 +3710,7 @@ def run_access(ns) -> int:
             if access_type == "direct-http":
                 if automation:
                     raise ValueError("device automation access requires an SSH-forward access path")
-                url = f"http://{host}:{remote_port}{path}"
+                url = f"{scheme}://{host}:{remote_port}{path}"
                 print("opening direct EVE-NG access")
                 print(f"URL: {url}")
                 _print_guest_network_guidance(access)
@@ -3567,7 +3789,7 @@ def run_access(ns) -> int:
             port = _available_local_port(requested_port)
             if requested_port:
                 _require_local_ports_available([port])
-            url = f"http://127.0.0.1:{port}{path}"
+            url = f"{scheme}://127.0.0.1:{port}{path}"
             automation_session: dict[str, Any] | None = None
             socks_port = 0
             gateway = {
@@ -3746,7 +3968,7 @@ def run_access(ns) -> int:
         port = _available_local_port(int(getattr(ns, "local_port", 0) or 0))
         if int(getattr(ns, "local_port", 0) or 0):
             _require_local_ports_available([port])
-        url = f"http://127.0.0.1:{port}{path}"
+        url = f"{scheme}://127.0.0.1:{port}{path}"
         gcloud = shutil.which("gcloud")
         if not gcloud:
             raise ValueError("gcloud is required; run: hyops setup gcp")
@@ -4180,6 +4402,11 @@ def _select_lab_restore_mode(
     overwrite = bool(getattr(ns, "overwrite_labs", False))
     overwrite_images = bool(getattr(ns, "overwrite_images", False))
 
+    if not isinstance(lifecycle, dict) and bool(
+        getattr(ns, "_containerlab_restore_handled", False)
+    ):
+        return "none", None
+
     if overwrite and not requested:
         raise ValueError("--overwrite-labs requires --restore-labs")
     if overwrite_images and not requested:
@@ -4214,6 +4441,126 @@ def _select_lab_restore_mode(
     if confirmed is None:
         return "skip", archive
     return ("restore" if confirmed else "skip"), archive
+
+
+def _containerlab_recovery_step(payload: dict[str, Any]) -> dict[str, Any] | None:
+    for step in payload.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("module_ref") or "").strip() != _CONTAINERLAB_LAB_MODULE_REF:
+            continue
+        inputs = step.get("inputs")
+        if isinstance(inputs, dict) and "containerlab_lab_restore_latest" in inputs:
+            return step
+    return None
+
+
+def _containerlab_recovery_files(step: dict[str, Any], paths) -> tuple[Path, Path, Path]:
+    inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+    configured = str(inputs.get("containerlab_lab_restore_latest_path") or "").strip()
+    archive = (
+        Path(configured).expanduser()
+        if configured
+        else paths.root / "artifacts" / "containerlab" / "recovery" / "latest.tar.gz"
+    )
+    return archive, Path(f"{archive}.sha256"), Path(f"{archive}.json")
+
+
+def _configure_containerlab_restore(ns, payload: dict[str, Any], paths) -> tuple[bool, bool]:
+    """Resolve Containerlab recovery before step inputs are materialised.
+
+    Returns ``(handled, confirmed)``. ``confirmed`` means the interactive
+    recovery choice also authorised this deployment, so a second generic
+    confirmation would be redundant.
+    """
+
+    step = _containerlab_recovery_step(payload)
+    if step is None:
+        return False, False
+
+    inputs = step["inputs"]
+    restore_default = bool(inputs.get("containerlab_lab_restore_latest", False))
+    requested = bool(getattr(ns, "restore_labs", False))
+    skipped = bool(getattr(ns, "skip_lab_restore", False))
+    overwrite = bool(getattr(ns, "overwrite_labs", False))
+    overwrite_images = bool(getattr(ns, "overwrite_images", False))
+    if overwrite and not requested:
+        raise ValueError("--overwrite-labs requires --restore-labs")
+    if overwrite_images:
+        raise ValueError("--overwrite-images is not supported by Containerlab recovery")
+    archive, checksum, metadata = _containerlab_recovery_files(step, paths)
+    present = (archive.exists(), checksum.is_file(), metadata.is_file())
+
+    if any(present) and not all(present):
+        raise ValueError(
+            "Containerlab recovery markers are incomplete; repair or remove the "
+            f"recovery set rooted at {archive}"
+        )
+    available = all(present)
+    target_status = module_state_status(paths.state_dir, step_state_ref(step))
+    target_active = bool(target_status) and target_status not in {
+        "absent",
+        "destroyed",
+        "missing",
+    }
+
+    if requested and not available:
+        raise ValueError(
+            "no verified Containerlab recovery state is available for this environment"
+        )
+    if requested and target_active and not overwrite:
+        raise ValueError(
+            "restoring Containerlab recovery state over an active lab requires --overwrite-labs"
+        )
+
+    if requested:
+        inputs["containerlab_lab_restore_latest"] = True
+        setattr(ns, "_containerlab_restore_handled", True)
+        return True, False
+    if skipped:
+        inputs["containerlab_lab_restore_latest"] = False
+        setattr(ns, "_containerlab_restore_handled", True)
+        return True, False
+
+    if target_active:
+        # A routine converge must not replay an older recovery archive over an
+        # active lab merely because the retained archive is still present.
+        inputs["containerlab_lab_restore_latest"] = False
+        return True, False
+    if not available or not restore_default:
+        return True, False
+
+    setattr(ns, "_containerlab_restore_handled", True)
+    if bool(getattr(ns, "yes", False)) or bool(getattr(ns, "json", False)):
+        inputs["containerlab_lab_restore_latest"] = True
+        return True, False
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        inputs["containerlab_lab_restore_latest"] = True
+        return True, False
+
+    print(f"verified recovery state: {archive}")
+    print("  1. Restore the latest verified state and deploy")
+    print("  2. Deploy without restoring saved state")
+    print("  3. Cancel")
+    choices = {"1": "restore", "2": "skip", "3": "cancel"}
+    while True:
+        try:
+            answer = input("Choose [1-3]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            setattr(ns, "_containerlab_restore_cancelled", True)
+            return True, True
+        selected = choices.get(answer)
+        if selected == "restore":
+            inputs["containerlab_lab_restore_latest"] = True
+            return True, True
+        if selected == "skip":
+            inputs["containerlab_lab_restore_latest"] = False
+            return True, True
+        if selected == "cancel":
+            setattr(ns, "_containerlab_restore_cancelled", True)
+            return True, True
+        print("invalid choice; enter exactly 1, 2, or 3")
 
 
 _ANSIBLE_TASK_LINE = re.compile(
@@ -4564,7 +4911,16 @@ def run_deploy(ns) -> int:
 
     ns.preflight_context = preflight_decision
 
-    confirm_rc = _confirm_deploy_if_needed(ns, payload, paths)
+    try:
+        _, recovery_confirmed = _configure_containerlab_restore(ns, payload, paths)
+    except (OSError, ValueError) as exc:
+        print(f"ERR: blueprint deploy failed: {exc}")
+        return OPERATOR_ERROR
+    if bool(getattr(ns, "_containerlab_restore_cancelled", False)):
+        print("blueprint deploy cancelled by operator")
+        return CANCELLED
+
+    confirm_rc = 0 if recovery_confirmed else _confirm_deploy_if_needed(ns, payload, paths)
     if confirm_rc != 0:
         if json_mode:
             print(
@@ -5021,21 +5377,24 @@ def run_deploy(ns) -> int:
 def _select_archive_destroy_mode(ns, payload: dict[str, Any], env_name: str) -> str:
     archive = payload.get("archive_before_destroy")
     if not isinstance(archive, dict) or not archive:
-        if (
-            bool(getattr(ns, "archive_before_destroy", False))
-            or bool(getattr(ns, "skip_archive", False))
-            or bool(getattr(ns, "guest_quiesced", False))
-            or bool(str(getattr(ns, "quiesce_script", "") or "").strip())
-            or getattr(ns, "quiesce_timeout", None) is not None
-        ):
-            raise ValueError("this blueprint does not declare a lab archive lifecycle")
         destroy_gate = any(
             bool(step.get("destroy_gate", False))
             for step in payload.get("steps", [])
             if isinstance(step, dict)
         )
+        if (
+            bool(getattr(ns, "archive_before_destroy", False))
+            or bool(getattr(ns, "guest_quiesced", False))
+            or bool(str(getattr(ns, "quiesce_script", "") or "").strip())
+            or getattr(ns, "quiesce_timeout", None) is not None
+        ):
+            raise ValueError("this blueprint does not declare a lab archive lifecycle")
         if not destroy_gate:
+            if bool(getattr(ns, "skip_archive", False)):
+                raise ValueError("this blueprint does not declare a lab archive lifecycle")
             return "none"
+        if bool(getattr(ns, "skip_archive", False)):
+            return "skip"
         if bool(getattr(ns, "yes", False)):
             return "protected"
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -5044,17 +5403,18 @@ def _select_archive_destroy_mode(ns, payload: dict[str, Any], env_name: str) -> 
         print("recovery state:")
         print("  1. Keep the environment running")
         print("  2. Preserve declared recovery state, verify, then destroy")
-        choices = {"1": "keep", "2": "protected"}
+        print("  3. Destroy without preserving recovery state")
+        choices = {"1": "keep", "2": "protected", "3": "skip"}
         while True:
             try:
-                answer = input("Choose [1-2]: ").strip()
+                answer = input("Choose [1-3]: ").strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return "cancel"
             selected = choices.get(answer)
             if selected is not None:
                 return selected
-            print("invalid choice; enter exactly 1 or 2")
+            print("invalid choice; enter exactly 1, 2, or 3")
 
     if bool(getattr(ns, "archive_before_destroy", False)):
         return "archive"
@@ -5600,7 +5960,7 @@ def _run_destroy_unlocked(ns) -> int:
             setattr(ns, "guest_quiesced", True)
 
     if not bool(getattr(ns, "yes", False)) and not json_mode:
-        if payload.get("archive_before_destroy") or archive_mode == "protected":
+        if payload.get("archive_before_destroy") or archive_mode in {"protected", "skip"}:
             if _confirm_archive_destroy(env_name) is not True:
                 print("destroy cancelled")
                 print("environment retained")
@@ -5760,6 +6120,27 @@ def _run_destroy_unlocked(ns) -> int:
         }
 
         state_ref = step_state_ref(step)
+        if archive_mode == "skip" and bool(step.get("destroy_gate", False)):
+            result = dict(base)
+            result.update(
+                {
+                    "status": "skipped",
+                    "reason": "recovery-preservation-skipped",
+                    "rc": 0,
+                }
+            )
+            step_results.append(result)
+            progress.finish(
+                step_id,
+                step_id,
+                "skipped",
+                plain=(
+                    f"step={step_id} status=skipped "
+                    "reason=recovery-preservation-skipped"
+                ),
+                detail=f"preservation skipped, {completed_detail}",
+            )
+            continue
         if bool(step.get("retain_on_destroy", False)):
             result = dict(base)
             result.update({"status": "retained", "reason": "retain_on_destroy", "rc": 0})
