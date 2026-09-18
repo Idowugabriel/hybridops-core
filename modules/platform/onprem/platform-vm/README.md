@@ -9,6 +9,7 @@ Supports:
 - single VM shorthand (`vm_name`, optional `vm_id`, `vm_ipv4_cidr`, `vm_gateway`, `vm_mac`)
 - multi-VM mode via `vms` map (minimum one VM)
 - state-first template resolution via `template_state_ref` (optional `template_key`)
+- per-VM template references for multi-image VM sets
 - image templates from `core/onprem/template-image` outputs
 - authoritative IPAM enforcement by default (`require_ipam: true`)
 - post-apply SSH readiness gate by default (fails `platform-vm` apply before downstream modules when Linux VMs never become reachable)
@@ -25,6 +26,8 @@ Defaults remain in `spec.yml`; overlays are preferred for customization.
 Template behavior:
 - If `template_state_ref` is set, preflight resolves `template_vm_id` from env state before provider calls.
 - `build_image: true` is not supported; the module fails fast when this flag is set.
+- A VM in a `vms` map may set its own `template_state_ref` and `template_key`; HybridOps resolves
+  that reference before Terraform runs, so template VMIDs do not need to be hard-coded.
 
 VM naming (multi-env on one Proxmox cluster):
 - HybridOps keeps logical VM keys stable (`inputs.vms` keys such as `pgha-01`, `rke2-cp-01`) for state, inventory groups, and blueprint contracts.

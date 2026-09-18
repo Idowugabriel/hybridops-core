@@ -158,6 +158,49 @@ def _pick_template_id(outputs: dict[str, Any], template_key: str) -> int | None:
     return None
 
 
+def _resolve_template_id_from_state(
+    *,
+    state_dir: Path,
+    template_state_ref: str,
+    template_key: str,
+) -> tuple[int | None, str]:
+    """Resolve a template reference without requiring a hard-coded VMID."""
+    try:
+        state_payload = read_module_state(state_dir, template_state_ref)
+    except FileNotFoundError:
+        return (
+            None,
+            f"template_state_ref not found in env state: {template_state_ref} "
+            "(run: hyops deploy --module core/onprem/template-image --inputs <inputs.yml>)",
+        )
+    except Exception as exc:
+        return None, f"failed to read template_state_ref {template_state_ref}: {exc}"
+
+    state_status = str(state_payload.get("status") or "").strip().lower()
+    if state_status != "ok":
+        return (
+            None,
+            f"template_state_ref exists but is not ready: {template_state_ref} "
+            f"status={state_status or 'unknown'}",
+        )
+
+    outputs = state_payload.get("outputs")
+    if not isinstance(outputs, dict):
+        return None, f"template_state_ref has no usable outputs: {template_state_ref}"
+
+    template_id = _pick_template_id(outputs, template_key)
+    if template_id is None:
+        out_keys = ", ".join(sorted(outputs.keys()))
+        key_msg = f" key={template_key}" if template_key else ""
+        return (
+            None,
+            f"unable to resolve template VM ID from template_state_ref={template_state_ref}{key_msg}; "
+            f"outputs keys: [{out_keys}]",
+        )
+
+    return int(template_id), ""
+
+
 def _as_mapping(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be a mapping")
@@ -1354,6 +1397,52 @@ class ProxmoxVmContract(TerragruntModuleContract):
 
         state_dir = Path(state_dir_raw).expanduser().resolve()
 
+        # A multi-VM module may use more than one image family. Resolve an
+        # optional per-VM template reference from HybridOps state before the
+        # Terraform object is rendered; the git module consumes only the
+        # resulting template_vm_id field.
+        raw_vms = out.get("vms")
+        if isinstance(raw_vms, dict):
+            resolved_vms: dict[str, Any] = {}
+            for vm_name, raw_vm_cfg in raw_vms.items():
+                if not isinstance(raw_vm_cfg, dict):
+                    resolved_vms[vm_name] = raw_vm_cfg
+                    continue
+
+                vm_cfg = dict(raw_vm_cfg)
+                per_vm_ref = str(vm_cfg.get("template_state_ref") or "").strip()
+                per_vm_key = str(vm_cfg.get("template_key") or "").strip()
+                if per_vm_key and not per_vm_ref:
+                    return (
+                        out,
+                        warnings,
+                        f"inputs.vms[{vm_name}].template_key requires "
+                        f"inputs.vms[{vm_name}].template_state_ref",
+                    )
+                if per_vm_ref and as_positive_int(vm_cfg.get("template_vm_id")) is None:
+                    per_vm_id, per_vm_err = _resolve_template_id_from_state(
+                        state_dir=state_dir,
+                        template_state_ref=per_vm_ref,
+                        template_key=per_vm_key,
+                    )
+                    if per_vm_err:
+                        return out, warnings, (
+                            f"inputs.vms[{vm_name}] template resolution failed: {per_vm_err}"
+                        )
+                    if per_vm_id is None:
+                        return out, warnings, (
+                            f"inputs.vms[{vm_name}] template resolution returned no VMID"
+                        )
+                    vm_cfg["template_vm_id"] = int(per_vm_id)
+                    warnings.append(
+                        f"resolved inputs.vms[{vm_name}].template_vm_id={per_vm_id} "
+                        f"from template_state_ref={per_vm_ref}"
+                    )
+                vm_cfg.pop("template_state_ref", None)
+                vm_cfg.pop("template_key", None)
+                resolved_vms[vm_name] = vm_cfg
+            out["vms"] = resolved_vms
+
         # Evaluate the managed VM-set safety rail before probing the clone
         # template. A confirmed strict subset is a deletion-only lifecycle
         # operation: it can safely render a plan even when the historical
@@ -1428,43 +1517,13 @@ class ProxmoxVmContract(TerragruntModuleContract):
                 )
 
         if template_state_ref and as_positive_int(out.get("template_vm_id")) is None:
-            try:
-                state_payload = read_module_state(state_dir, template_state_ref)
-            except FileNotFoundError:
-                return (
-                    out,
-                    warnings,
-                    f"template_state_ref not found in env state: {template_state_ref} "
-                    "(run: hyops deploy --module core/onprem/template-image --inputs <inputs.yml>)",
-                )
-            except Exception as exc:
-                return out, warnings, f"failed to read template_state_ref {template_state_ref}: {exc}"
-
-            state_status = str(state_payload.get("status") or "").strip().lower()
-            if state_status != "ok":
-                return (
-                    out,
-                    warnings,
-                    f"template_state_ref exists but is not ready: {template_state_ref} status={state_status or 'unknown'}",
-                )
-
-            outputs = state_payload.get("outputs")
-            if not isinstance(outputs, dict):
-                return (
-                    out,
-                    warnings,
-                    f"template_state_ref has no usable outputs: {template_state_ref}",
-                )
-
-            template_id = _pick_template_id(outputs, template_key)
-            if template_id is None:
-                out_keys = ", ".join(sorted(outputs.keys()))
-                key_msg = f" key={template_key}" if template_key else ""
-                return (
-                    out,
-                    warnings,
-                    f"unable to resolve template VM ID from template_state_ref={template_state_ref}{key_msg}; outputs keys: [{out_keys}]",
-                )
+            template_id, template_err = _resolve_template_id_from_state(
+                state_dir=state_dir,
+                template_state_ref=template_state_ref,
+                template_key=template_key,
+            )
+            if template_err:
+                return out, warnings, template_err
 
             out["template_vm_id"] = int(template_id)
             warnings.append(
