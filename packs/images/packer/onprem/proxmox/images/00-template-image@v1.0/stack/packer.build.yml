@@ -24,6 +24,10 @@ templates:
     working_dir: "windows/server"
     var_file: "windows-server-2022.pkrvars.hcl"
     build_only: "windows.proxmox-iso.vm"
+  windows-server-2022-core:
+    working_dir: "windows/server"
+    var_file: "windows-server-2022-core.pkrvars.hcl"
+    build_only: "windows.proxmox-iso.vm"
   windows-server-2025:
     working_dir: "windows/server"
     var_file: "windows-server-2025.pkrvars.hcl"

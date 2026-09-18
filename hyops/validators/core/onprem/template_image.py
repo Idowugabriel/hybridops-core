@@ -10,6 +10,7 @@ from typing import Any
 
 _WINDOWS_TEMPLATE_KEYS = {
     "windows-server-2022",
+    "windows-server-2022-core",
     "windows-server-2025",
     "windows-11-enterprise",
 }

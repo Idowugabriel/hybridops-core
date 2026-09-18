@@ -47,6 +47,7 @@ Supported `template_key` values:
 - `rocky-9`
 - `rocky-10`
 - `windows-server-2022`
+- `windows-server-2022-core`
 - `windows-server-2025`
 - `windows-11-enterprise`
 
