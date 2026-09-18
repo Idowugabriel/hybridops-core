@@ -26,6 +26,9 @@ inputs:
     os_type: "l26"
     on_boot: true
     started: true
+    # Only enable for a Windows template that has been built and tested with
+    # Cloudbase-Init. The default keeps Windows on DHCP-only networking.
+    windows_config_drive: false
     dns_domain: "hybzone.local"
     dns_servers: ["8.8.8.8"]
     tags: ["platform", "onprem", "custom-vm"]

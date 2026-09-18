@@ -8,7 +8,7 @@ locals {
   # Single source of truth for the Proxmox vm-multi Terraform module.
   # Use Terragrunt's //subdir syntax so sibling nested modules (for example ../vm)
   # are copied into the cache.
-  module_source_default = "git::https://github.com/hybridops-tech/hybridops-terraform-gitmods.git//proxmox/vm-multi?ref=v0.1.6"
+  module_source_default = "git::https://github.com/hybridops-tech/hybridops-terraform-gitmods.git//proxmox/vm-multi?ref=v0.1.7"
   module_source_override = trimspace(get_env("HYOPS_PROXMOX_MODULE_SOURCE", ""))
   module_source = local.module_source_override != "" ? local.module_source_override : local.module_source_default
 
@@ -65,6 +65,8 @@ locals {
 
   dns_servers_in = try(local.inputs.dns_servers, [])
   dns_servers    = length(local.dns_servers_in) > 0 ? local.dns_servers_in : ["8.8.8.8"]
+
+  windows_config_drive = try(local.inputs.windows_config_drive, false)
 
   tags_in = try(local.inputs.tags, [])
   tags    = length(local.tags_in) > 0 ? local.tags_in : ["platform", "onprem"]
@@ -132,6 +134,7 @@ EOF
         ? null
         : try(raw_cfg.template_vm_id, local.effective_template_vm_id)
       )
+      windows_config_drive = try(raw_cfg.windows_config_drive, local.windows_config_drive)
       vm_id = try(raw_cfg.vm_id, null)
       vm_name = (
         trimspace(try(tostring(raw_cfg.vm_name), "")) != ""
@@ -204,6 +207,7 @@ EOF
       vm_name = local.vm_name_physical
       vm_id = local.vm_id
       interfaces = local.interfaces
+      windows_config_drive = local.windows_config_drive
       cloud_init_user_data = local.cloud_init_user_data
       cloud_init_network_data = local.cloud_init_network_data
       cloud_init_meta_data = local.cloud_init_meta_data
@@ -248,4 +252,5 @@ terraform {
   interfaces           = local.interfaces
   vms                  = local.vms
   preserve_existing    = local.preserve_existing_resources
+  windows_config_drive = local.windows_config_drive
 }

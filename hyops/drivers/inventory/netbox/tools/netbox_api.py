@@ -784,6 +784,19 @@ def find_ip_by_address(client: NetBoxClient, *, address: str) -> Optional[Dict[s
     return None
 
 
+def set_ip_description(
+    client: NetBoxClient,
+    *,
+    ip_id: int,
+    description: str,
+) -> Dict[str, Any]:
+    """Set an IP description without changing its address or assignment."""
+    description = str(description or "").strip()
+    if not description:
+        raise NetBoxConfigError("description is required")
+    return _patch(client, f"/api/ipam/ip-addresses/{int(ip_id)}/", {"description": description})
+
+
 def reserve_ip(
     client: NetBoxClient,
     *,

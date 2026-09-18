@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hyops.drivers.iac.terragrunt.contracts.proxmox_vm import ProxmoxVmContract
+from hyops.drivers.iac.terragrunt.contracts.proxmox_vm import (
+    ProxmoxVmContract,
+    _collect_windows_ipam_interfaces,
+    _collect_windows_non_dhcp_interfaces,
+)
 
 
 class ProxmoxVmContractDeletionOnlyTests(unittest.TestCase):
@@ -117,6 +121,132 @@ class ProxmoxVmContractDeletionOnlyTests(unittest.TestCase):
 
         self.assertIn("vm set collision detected", error)
 
+    def test_windows_allows_multiple_dhcp_interfaces(self) -> None:
+        inputs = {
+            "os_type": "win10",
+            "vms": {
+                "win-01": {
+                    "interfaces": [
+                        {"bridge": "vnetmgmt", "ipv4": {"address": "dhcp"}},
+                        {"bridge": "vnetdata"},
+                    ]
+                }
+            },
+        }
+
+        self.assertEqual(_collect_windows_non_dhcp_interfaces(inputs), [])
+
+    def test_windows_rejects_static_or_ipam_interface_without_guest_initializer(self) -> None:
+        inputs = {
+            "os_type": "win2022",
+            "vms": {
+                "win-01": {
+                    "interfaces": [
+                        {"bridge": "vnetmgmt", "ipv4": {"address": "dhcp"}},
+                        {"bridge": "vnetdata", "ipv4": {"address": "10.20.0.25/24"}},
+                    ]
+                }
+            },
+        }
+
+        affected = _collect_windows_non_dhcp_interfaces(inputs)
+        self.assertEqual(
+            affected,
+            ["win-01/interfaces[2] (vnetdata, address=10.20.0.25/24)"],
+        )
+
+    def test_windows_allows_non_dhcp_interfaces_with_explicit_config_drive_opt_in(self) -> None:
+        inputs = {
+            "os_type": "win2022",
+            "windows_config_drive": True,
+            "vms": {
+                "win-01": {
+                    "interfaces": [
+                        {"bridge": "vnetmgmt", "ipv4": {"address": "dhcp"}},
+                        {"bridge": "vnetdata", "ipv4": {"address": "10.20.0.25/24"}},
+                    ]
+                }
+            },
+        }
+
+        self.assertEqual(_collect_windows_non_dhcp_interfaces(inputs), [])
+
+    def test_windows_rejects_omitted_ipam_interface_before_hydration(self) -> None:
+        inputs = {
+            "os_type": "win2022",
+            "addressing": {"mode": "ipam", "ipam": {"provider": "netbox"}},
+            "vms": {
+                "win-01": {
+                    "interfaces": [
+                        {"bridge": "vnetmgmt", "ipv4": {"address": "dhcp"}},
+                        {"bridge": "vnetdata"},
+                    ]
+                }
+            },
+        }
+
+        self.assertEqual(
+            _collect_windows_ipam_interfaces(inputs),
+            ["win-01/interfaces[2] (vnetdata, NetBox IPAM address)"],
+        )
+
+    def test_windows_allows_omitted_ipam_interface_with_explicit_config_drive_opt_in(self) -> None:
+        inputs = {
+            "os_type": "win2022",
+            "windows_config_drive": True,
+            "addressing": {"mode": "ipam", "ipam": {"provider": "netbox"}},
+            "vms": {"win-01": {"interfaces": [{"bridge": "vnetdata"}]}},
+        }
+
+        self.assertEqual(_collect_windows_ipam_interfaces(inputs), [])
+
+    def test_contract_preflight_stops_windows_static_interface_before_external_probes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, error = ProxmoxVmContract().preprocess_inputs(
+                command_name="plan",
+                module_ref="platform/onprem/platform-vm",
+                inputs={
+                    "os_type": "win2022",
+                    "vms": {
+                        "win-01": {
+                            "interfaces": [
+                                {"bridge": "vnetmgmt", "ipv4": {"address": "10.10.0.25/24"}}
+                            ]
+                        }
+                    },
+                },
+                profile_policy={},
+                runtime={"state_dir": str(Path(tmp) / "state"), "env": "dev"},
+                env={"HYOPS_ENV": "dev"},
+                credential_env={},
+            )
+
+        self.assertIn("Windows guest networking currently supports DHCP interfaces only", error)
+
+    def test_contract_preflight_stops_windows_ipam_interface_before_hydration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, error = ProxmoxVmContract().preprocess_inputs(
+                command_name="plan",
+                module_ref="platform/onprem/platform-vm",
+                inputs={
+                    "os_type": "win2022",
+                    "addressing": {"mode": "ipam", "ipam": {"provider": "netbox"}},
+                    "vms": {
+                        "win-01": {
+                            "interfaces": [
+                                {"bridge": "vnetmgmt", "ipv4": {"address": "dhcp"}},
+                                {"bridge": "vnetdata"},
+                            ]
+                        }
+                    },
+                },
+                profile_policy={},
+                runtime={"state_dir": str(Path(tmp) / "state"), "env": "dev"},
+                env={"HYOPS_ENV": "dev"},
+                credential_env={},
+            )
+
+        self.assertIn("an omitted address in IPAM mode would be hydrated", error)
 
 if __name__ == "__main__":
     unittest.main()

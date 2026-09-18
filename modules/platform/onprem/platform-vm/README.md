@@ -43,6 +43,29 @@ IPAM enforcement:
 - In IPAM mode, apply/preflight fails fast when NetBox authority state is not ready.
 - In IPAM mode, HybridOps also reads `core/onprem/network-sdn` from the SDN authority (default: `--env shared`) to map `bridge -> subnet` for allocations.
 - In IPAM mode, interfaces without explicit `ipv4.address` are allocated from NetBox IPAM.
+- Addressing is evaluated per interface: set `ipv4.address: dhcp` for a DHCP NIC;
+  leave it unset in IPAM mode to allocate that NIC from NetBox; or provide an
+  explicit CIDR for a fixed interface address. The first interface is the only
+  one that may carry the default gateway.
+
+For example, one Linux VM may have a DHCP management NIC and two controlled
+NICs without making the whole VM DHCP-only:
+
+```yaml
+addressing:
+  mode: ipam
+  ipam: {provider: netbox}
+interfaces:
+  - bridge: vnetmgmt
+    ipv4: {address: dhcp}
+  - bridge: vnetdev                 # omitted address => allocate from NetBox
+  - bridge: vnetdata
+    ipv4: {address: 10.20.0.25/24} # must already be reserved for this VM/NIC
+```
+
+The top-level mode selects the authority for controlled addresses; the
+interface value selects DHCP versus a fixed address. HybridOps does not mix
+unmanaged hand-entered static addresses with NetBox authority in one IPAM run.
 - In IPAM mode, an explicit `ipv4.address` is allowed only when NetBox already
   reserves that exact address for the same HybridOps logical VM, bridge, and NIC
   identity. A hand-entered address cannot bypass NetBox or another platform VM
@@ -51,6 +74,11 @@ IPAM enforcement:
 - NetBox IPAM prevents duplicate allocations/conflicts; if a prior reservation is still present, HybridOps will not allocate the same IP to another VM.
 - In IPAM mode, ensure `NETBOX_API_TOKEN` is present for the target env (`hyops secrets ensure --env <env> NETBOX_API_TOKEN`).
 - For day-0 bootstrap only, override with `require_ipam: false` and explicit static interface IPs.
+- Windows clones use DHCP by default. Set `windows_config_drive: true` only
+  when the source template has been built and tested with Cloudbase-Init; this
+  enables Windows static/IPAM NICs through the versioned Proxmox config-drive.
+  Without that explicit opt-in, HybridOps rejects Windows static/IPAM
+  interfaces. Linux mixed DHCP/IPAM/static layouts remain supported.
 - Bridge alias `vnetenv` is supported for workload blueprints and resolves from `--env`:
   - `dev` -> `vnetdev`
   - `staging`/`stage` -> `vnetstag`

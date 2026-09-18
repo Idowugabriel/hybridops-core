@@ -79,6 +79,24 @@ def _validate_preserve_existing_vms(data: dict[str, Any]) -> None:
         raise ValueError("inputs.preserve_existing_vms must be a boolean when set")
 
 
+def _validate_windows_config_drive(data: dict[str, Any]) -> None:
+    raw = data.get("windows_config_drive")
+    if raw is not None and not isinstance(raw, bool):
+        raise ValueError("inputs.windows_config_drive must be a boolean when set")
+
+    raw_vms = data.get("vms")
+    if not isinstance(raw_vms, dict):
+        return
+    for vm_name, raw_cfg in raw_vms.items():
+        if not isinstance(raw_cfg, dict):
+            continue
+        per_vm = raw_cfg.get("windows_config_drive")
+        if per_vm is not None and not isinstance(per_vm, bool):
+            raise ValueError(
+                f"inputs.vms[{vm_name}].windows_config_drive must be a boolean when set"
+            )
+
+
 def _validate_interfaces(value: Any, field: str) -> None:
     if not isinstance(value, list) or not value:
         raise ValueError(f"{field} must be a non-empty list")
@@ -136,6 +154,7 @@ def validate_single_vm_inputs(inputs: dict[str, Any]) -> None:
     _validate_require_ipam(data)
     _validate_allow_vm_set_replace(data)
     _validate_preserve_existing_vms(data)
+    _validate_windows_config_drive(data)
 
     _require_vm_name(data.get("vm_name"), "inputs.vm_name")
     vm_id = data.get("vm_id")
@@ -210,6 +229,7 @@ def validate_vm_pool_inputs(inputs: dict[str, Any]) -> None:
     _validate_require_ipam(data)
     _validate_allow_vm_set_replace(data)
     _validate_preserve_existing_vms(data)
+    _validate_windows_config_drive(data)
 
     template_state_ref = str(data.get("template_state_ref") or "").strip()
     template_vm_id = data.get("template_vm_id")

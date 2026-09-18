@@ -32,6 +32,12 @@ windows_edition        = "Windows Server 2022 SERVERDATACENTER"
 windows_language       = "en-US"
 windows_input_language = "en-US"
 
+# Cloudbase-Init consumes the Proxmox config-drive on clones so Windows can
+# apply per-interface DHCP/IPAM intent. The platform VM module enables delivery
+# only when windows_config_drive=true.
+cloudbase_init_enabled = true
+cloudbase_init_msi_url = "https://www.cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi"
+
 additional_iso_files = [
   {
     iso_file     = "virtio-win-0.1.285.iso"

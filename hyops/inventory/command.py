@@ -133,6 +133,33 @@ def add_inventory_subparser(sp: argparse._SubParsersAction) -> None:
     )
     s.set_defaults(_handler=run_sync_netbox)
 
+    a = ssp.add_parser(
+        "adopt-ipam",
+        help="Review or adopt fixed VM addresses from HybridOps state into NetBox IPAM.",
+    )
+    a.add_argument("--root", default=None, help="Runtime root override.")
+    a.add_argument("--env", default=None, help="Runtime environment containing the VM state.")
+    a.add_argument("--module-ref", default="platform/onprem/platform-vm")
+    a.add_argument(
+        "--state-instance",
+        action="append",
+        required=True,
+        help="Managed platform-vm state instance; repeat for multiple instances.",
+    )
+    a.add_argument(
+        "--network-env",
+        default="shared",
+        help="Environment holding the network_sdn authority (default: shared).",
+    )
+    a.add_argument("--zone", default=None, help="Override the zone name from network_sdn state.")
+    a.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write reservations after all conflicts pass (default is review-only).",
+    )
+    a.add_argument("--output", default=None, help="Write the JSON plan to this path as well as stdout.")
+    a.set_defaults(_handler=run_adopt_ipam)
+
 
 def run_export_infra(ns) -> int:
     try:
@@ -234,4 +261,31 @@ def run_sync_netbox(ns) -> int:
         return INTERNAL_ERROR
 
 
-__all__ = ["add_inventory_subparser", "run_export_infra", "run_sync_netbox"]
+def run_adopt_ipam(ns) -> int:
+    argv: list[str] = []
+    for key in ("root", "env", "module_ref", "network_env", "zone", "output"):
+        value = str(getattr(ns, key, "") or "").strip()
+        if value:
+            argv += [f"--{key.replace('_', '-')}", value]
+    for instance in list(getattr(ns, "state_instance", []) or []):
+        if str(instance or "").strip():
+            argv += ["--state-instance", str(instance)]
+    if bool(getattr(ns, "apply", False)):
+        argv.append("--apply")
+
+    try:
+        from hyops.drivers.inventory.netbox.tools.adopt_ipam import main as adopt_ipam_main
+    except ModuleNotFoundError as e:
+        print(f"ERR: IPAM adoption unavailable; missing dependency: {e.name}")
+        return INTERNAL_ERROR
+
+    try:
+        return int(adopt_ipam_main(argv))
+    except SystemExit as e:
+        return _exit_code_from_system_exit(e)
+    except Exception as e:
+        print(f"ERR: failed to adopt IPAM addresses: {e}")
+        return INTERNAL_ERROR
+
+
+__all__ = ["add_inventory_subparser", "run_export_infra", "run_sync_netbox", "run_adopt_ipam"]

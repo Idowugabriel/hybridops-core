@@ -165,5 +165,9 @@ build {
 
   provisioner "powershell" {
     script = "${path.root}/../shared/scripts/prepare-template.ps1"
+    environment_vars = [
+      "HYOPS_CLOUDBASE_INIT_ENABLED=${var.cloudbase_init_enabled}",
+      "HYOPS_CLOUDBASE_INIT_MSI_URL=${var.cloudbase_init_msi_url}",
+    ]
   }
 }

@@ -281,6 +281,117 @@ def _collect_requested_bridges(inputs: dict[str, Any]) -> set[str]:
     return bridges
 
 
+def _windows_config_drive_enabled(
+    inputs: dict[str, Any],
+    vm_cfg: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether the caller explicitly opted into Windows config-drive networking."""
+    if isinstance(vm_cfg, dict) and "windows_config_drive" in vm_cfg:
+        return vm_cfg.get("windows_config_drive") is True
+    return inputs.get("windows_config_drive") is True
+
+
+def _collect_windows_non_dhcp_interfaces(inputs: dict[str, Any]) -> list[str]:
+    """Return Windows NICs that request an address other than DHCP.
+
+    The Proxmox Terraform module emits Windows initialization only when the
+    caller explicitly enables the verified guest-side initializer. Without
+    that opt-in, a Windows clone cannot safely consume a static/IPAM address.
+    DHCP remains valid for every Windows NIC.
+
+    The result is intentionally descriptive rather than a boolean so callers
+    can report the affected logical VM and NIC index without changing the
+    addressing contract for Linux guests.
+    """
+    module_os_type = str(inputs.get("os_type") or "").strip().lower()
+    if not module_os_type.startswith("win"):
+        return []
+
+    raw_module_ifaces = inputs.get("interfaces")
+    module_ifaces = raw_module_ifaces if isinstance(raw_module_ifaces, list) else []
+    raw_vms = inputs.get("vms")
+    vm_entries: list[tuple[str, list[Any]]] = []
+    if isinstance(raw_vms, dict) and raw_vms:
+        for raw_vm_name, raw_vm_cfg in raw_vms.items():
+            if not isinstance(raw_vm_cfg, dict):
+                continue
+            raw_ifaces = raw_vm_cfg.get("interfaces")
+            if _windows_config_drive_enabled(inputs, raw_vm_cfg):
+                continue
+            if isinstance(raw_ifaces, list) and raw_ifaces:
+                vm_ifaces = raw_ifaces
+            else:
+                vm_ifaces = module_ifaces
+            vm_entries.append((str(raw_vm_name).strip() or "<unnamed>", vm_ifaces))
+    else:
+        vm_name = str(inputs.get("vm_name") or "vm").strip() or "vm"
+        if not _windows_config_drive_enabled(inputs):
+            vm_entries.append((vm_name, module_ifaces))
+
+    non_dhcp: list[str] = []
+    for vm_name, interfaces in vm_entries:
+        for idx, nic in enumerate(interfaces, start=1):
+            if not isinstance(nic, dict):
+                continue
+            ipv4 = nic.get("ipv4")
+            address = "dhcp"
+            if isinstance(ipv4, dict):
+                address = str(ipv4.get("address") or "dhcp").strip().lower() or "dhcp"
+            if address != "dhcp":
+                bridge = str(nic.get("bridge") or "<bridge>").strip() or "<bridge>"
+                non_dhcp.append(f"{vm_name}/interfaces[{idx}] ({bridge}, address={address})")
+    return non_dhcp
+
+
+def _collect_windows_ipam_interfaces(inputs: dict[str, Any]) -> list[str]:
+    """Return Windows NICs that would be made static by IPAM allocation.
+
+    An omitted address normally means DHCP. In IPAM mode, however, the
+    contract hydrates that omission from the NetBox reservation before
+    Terraform runs. Without the explicit Windows initializer opt-in, do not
+    let the pre-hydration DHCP default bypass the safety check.
+    """
+    module_os_type = str(inputs.get("os_type") or "").strip().lower()
+    if not module_os_type.startswith("win"):
+        return []
+    addressing = inputs.get("addressing")
+    if not isinstance(addressing, dict) or str(addressing.get("mode") or "").strip().lower() != "ipam":
+        return []
+
+    raw_module_ifaces = inputs.get("interfaces")
+    module_ifaces = raw_module_ifaces if isinstance(raw_module_ifaces, list) else []
+    raw_vms = inputs.get("vms")
+    vm_entries: list[tuple[str, list[Any]]] = []
+    if isinstance(raw_vms, dict) and raw_vms:
+        for raw_vm_name, raw_vm_cfg in raw_vms.items():
+            if not isinstance(raw_vm_cfg, dict):
+                continue
+            if _windows_config_drive_enabled(inputs, raw_vm_cfg):
+                continue
+            raw_ifaces = raw_vm_cfg.get("interfaces")
+            vm_ifaces = raw_ifaces if isinstance(raw_ifaces, list) and raw_ifaces else module_ifaces
+            vm_entries.append((str(raw_vm_name).strip() or "<unnamed>", vm_ifaces))
+    else:
+        vm_name = str(inputs.get("vm_name") or "vm").strip() or "vm"
+        if not _windows_config_drive_enabled(inputs):
+            vm_entries.append((vm_name, module_ifaces))
+
+    allocated: list[str] = []
+    for vm_name, interfaces in vm_entries:
+        for idx, nic in enumerate(interfaces, start=1):
+            if not isinstance(nic, dict):
+                continue
+            ipv4 = nic.get("ipv4")
+            address = ""
+            if isinstance(ipv4, dict):
+                address = str(ipv4.get("address") or "").strip().lower()
+            if address == "dhcp":
+                continue
+            bridge = str(nic.get("bridge") or "<bridge>").strip() or "<bridge>"
+            allocated.append(f"{vm_name}/interfaces[{idx}] ({bridge}, NetBox IPAM address)")
+    return allocated
+
+
 def _resolve_sdn_expected_gateways(
     *,
     sdn_outputs: dict[str, Any],
@@ -946,6 +1057,46 @@ def _collect_existing_managed_vm_names_by_slot(
     return out, ""
 
 
+def _collect_existing_managed_interface_keys(
+    state_dir: Path,
+    module_ref: str,
+    *,
+    state_instance: str | None,
+) -> tuple[set[str], set[str], str]:
+    """Return existing logical VM/NIC identities for one managed state slot."""
+    try:
+        payload = read_module_state(state_dir, module_ref, state_instance=state_instance)
+    except FileNotFoundError:
+        return set(), set(), ""
+    except Exception as exc:
+        return set(), set(), f"failed to read existing interface state: {exc}"
+
+    outputs = payload.get("outputs")
+    if not isinstance(outputs, dict):
+        return set(), set(), ""
+    raw_vms = outputs.get("vms")
+    if not isinstance(raw_vms, dict):
+        return set(), set(), ""
+
+    keys: set[str] = set()
+    vms_with_interfaces: set[str] = set()
+    for raw_vm_name, raw_vm in raw_vms.items():
+        vm_name = str(raw_vm_name or "").strip()
+        if not vm_name or not isinstance(raw_vm, dict):
+            continue
+        interfaces = raw_vm.get("interfaces_configured")
+        if not isinstance(interfaces, list):
+            continue
+        vms_with_interfaces.add(vm_name)
+        for idx, raw_nic in enumerate(interfaces, start=1):
+            if not isinstance(raw_nic, dict):
+                continue
+            bridge = str(raw_nic.get("bridge") or "").strip()
+            if bridge:
+                keys.add(f"{vm_name}:{bridge}:{idx}")
+    return keys, vms_with_interfaces, ""
+
+
 def _format_vm_set_diff(existing: set[str], requested: set[str]) -> str:
     existing_only = sorted(existing - requested)
     requested_only = sorted(requested - existing)
@@ -1159,6 +1310,32 @@ class ProxmoxVmContract(TerragruntModuleContract):
         if alias_err:
             return out, warnings, alias_err
 
+        windows_non_dhcp = _collect_windows_non_dhcp_interfaces(out)
+        if windows_non_dhcp:
+            return (
+                out,
+                warnings,
+                "Windows guest networking currently supports DHCP interfaces only; "
+                "the Proxmox module does not apply host-side static/IPAM initialization to Windows. "
+                "Build the template with a verified guest-side initializer (for example Cloudbase-Init) "
+                "and set windows_config_drive=true before using static or IPAM addresses on Windows NICs. "
+                "Affected interfaces: "
+                + ", ".join(windows_non_dhcp),
+            )
+
+        windows_ipam = _collect_windows_ipam_interfaces(out)
+        if windows_ipam:
+            return (
+                out,
+                warnings,
+                "Windows guest networking currently supports DHCP interfaces only; "
+                "an omitted address in IPAM mode would be hydrated to a static NetBox address, "
+                "but the Proxmox module does not apply that address inside Windows. Build the template "
+                "with a verified guest-side initializer (for example Cloudbase-Init) and set "
+                "windows_config_drive=true before using mixed DHCP/IPAM Windows NICs. Affected interfaces: "
+                + ", ".join(windows_ipam),
+            )
+
         build_image = as_bool(out.get("build_image"), default=False)
         if build_image:
             return (
@@ -1185,6 +1362,9 @@ class ProxmoxVmContract(TerragruntModuleContract):
         confirmed_deletion_only_vm_set = False
         preserve_existing_vms = as_bool(out.get("preserve_existing_vms"), default=False)
         existing_vm_set_is_stable = False
+        existing_vm_names: set[str] = set()
+        existing_interface_keys: set[str] = set()
+        existing_interface_vms: set[str] = set()
         if requested_vm_names:
             raw_state_instance = str(runtime.get("state_instance") or "").strip().lower()
             current_slot = f"instance:{raw_state_instance}" if raw_state_instance else "latest"
@@ -1196,6 +1376,16 @@ class ProxmoxVmContract(TerragruntModuleContract):
                 return out, warnings, existing_err
 
             existing_vm_names = existing_by_slot.get(current_slot, set())
+            if existing_vm_names:
+                existing_interface_keys, existing_interface_vms, interface_state_err = (
+                    _collect_existing_managed_interface_keys(
+                        state_dir,
+                        module_ref,
+                        state_instance=raw_state_instance or None,
+                    )
+                )
+                if interface_state_err:
+                    return out, warnings, interface_state_err
             existing_vm_set_is_stable = bool(
                 existing_vm_names and existing_vm_names == requested_vm_names
             )
@@ -1351,12 +1541,19 @@ class ProxmoxVmContract(TerragruntModuleContract):
                             "(for example: core/onprem/template-image or core/onprem/vyos-template-seed).",
                         )
                 elif not is_template:
-                    return (
-                        out,
-                        warnings,
-                        f"template_vm_id={resolved_template_vm_id} exists on the Proxmox host but is not marked as a template. "
-                        "Fix the source VM or rebuild the template before continuing.",
-                    )
+                    if preserve_existing_vms and existing_vm_set_is_stable:
+                        warnings.append(
+                            f"template_vm_id={resolved_template_vm_id} exists but is not marked as a template; "
+                            "preserving the stable managed VM set and its existing clone provenance for an "
+                            "explicit update-only run. Terraform must still show in-place changes before apply."
+                        )
+                    else:
+                        return (
+                            out,
+                            warnings,
+                            f"template_vm_id={resolved_template_vm_id} exists on the Proxmox host but is not marked as a template. "
+                            "Fix the source VM or rebuild the template before continuing.",
+                        )
             else:
                 warnings.append(
                     "template vm probe skipped: proxmox API or SSH runtime credentials are not available"
@@ -1624,6 +1821,84 @@ class ProxmoxVmContract(TerragruntModuleContract):
                             )
                     return ""
 
+                def resolve_existing_ipam_addresses(vm_name: str, interfaces: list[Any]) -> str:
+                    """Hydrate existing identity reservations during plan/validate.
+
+                    Allocation is intentionally apply-only, but a plan must still
+                    render the address that an existing NetBox identity owns. If
+                    no reservation exists, fail rather than letting Terraform
+                    silently interpret an omitted IP as DHCP.
+                    """
+                    for idx, nic_raw in enumerate(interfaces):
+                        if not isinstance(nic_raw, dict):
+                            return f"inputs.vms[{vm_name}].interfaces[{idx+1}] must be a mapping"
+                        bridge = str(nic_raw.get("bridge") or "").strip()
+                        if not bridge:
+                            return f"inputs.vms[{vm_name}].interfaces[{idx+1}].bridge is required"
+
+                        ipv4 = nic_raw.get("ipv4")
+                        if isinstance(ipv4, dict):
+                            address = str(ipv4.get("address") or "").strip().lower()
+                            if address and address != "dhcp":
+                                continue
+                            if address == "dhcp":
+                                continue
+                        elif ipv4 is not None:
+                            return f"inputs.vms[{vm_name}].interfaces[{idx+1}].ipv4 must be a mapping when set"
+
+                        identity = f"hyops:{zone_name}:{vm_name}:{bridge}:{idx+1}"
+                        reservation = find_ip_by_description(client, description=identity)
+                        if not isinstance(reservation, dict):
+                            interface_key = f"{vm_name}:{bridge}:{idx+1}"
+                            if (
+                                vm_name not in existing_vm_names
+                                or (
+                                    vm_name in existing_interface_vms
+                                    and interface_key not in existing_interface_keys
+                                )
+                            ):
+                                warnings.append(
+                                    f"ipam reservation missing for new interface identity {identity}; "
+                                    "allocation will occur during apply"
+                                )
+                                continue
+                            return (
+                                f"ipam reservation missing for {identity}; refusing to plan an omitted address as DHCP. "
+                                "Run the HybridOps IPAM adoption/allocation workflow first."
+                            )
+                        raw_reserved = str(reservation.get("address") or "").strip()
+                        try:
+                            reserved_host = ipaddress.ip_address(raw_reserved.split("/", 1)[0])
+                        except Exception as exc:
+                            return f"NetBox reservation for {identity} has invalid address {raw_reserved!r}: {exc}"
+                        if not isinstance(reserved_host, ipaddress.IPv4Address):
+                            return f"NetBox reservation for {identity} must be IPv4"
+
+                        subnet = subnet_by_vnet.get(bridge)
+                        if not subnet:
+                            known = ", ".join(sorted(subnet_by_vnet.keys()))
+                            return (
+                                f"ipam cannot map bridge={bridge!r} to a subnet from {network_state_ref}. "
+                                f"Known vnets: [{known}]"
+                            )
+                        try:
+                            subnet_network = ipaddress.ip_network(str(subnet.get("cidr") or ""), strict=False)
+                        except Exception as exc:
+                            return f"ipam subnet for bridge={bridge!r} has invalid cidr: {exc}"
+                        if reserved_host not in subnet_network:
+                            return (
+                                f"NetBox reservation {raw_reserved} for {identity} is outside "
+                                f"the authoritative subnet {subnet_network}"
+                            )
+
+                        nic_ipv4: dict[str, Any] = {
+                            "address": f"{reserved_host}/{subnet_network.prefixlen}"
+                        }
+                        if idx == 0:
+                            nic_ipv4["gateway"] = str(subnet.get("gateway") or "").strip()
+                        nic_raw["ipv4"] = nic_ipv4
+                    return ""
+
                 vms = out.get("vms")
                 is_pool = isinstance(vms, dict) and len(vms) > 0
                 if is_pool:
@@ -1646,8 +1921,49 @@ class ProxmoxVmContract(TerragruntModuleContract):
                             return out, warnings, err
 
                 # No mutations on preflight/plan/validate: explicit addresses are still
-                # validated against NetBox and state, but allocations happen only on apply.
+                # validated against NetBox and state. Existing identity reservations
+                # are hydrated so Terraform cannot mistake an omitted IP for DHCP.
                 if normalized_command in ("preflight", "plan", "validate"):
+                    if is_pool:
+                        module_ifaces = out.get("interfaces")
+                        module_ifaces_list: list[Any] = module_ifaces if isinstance(module_ifaces, list) else []
+                        for vm_name, vm_cfg in vms.items():
+                            if not isinstance(vm_cfg, dict):
+                                return out, warnings, f"inputs.vms[{vm_name}] must be a mapping"
+                            ifaces = vm_cfg.get("interfaces")
+                            if ifaces is None:
+                                if not module_ifaces_list:
+                                    return (
+                                        out,
+                                        warnings,
+                                        f"ipam requires inputs.vms[{vm_name}].interfaces (or module-level inputs.interfaces) "
+                                        "so HybridOps can map bridge->subnet for allocation",
+                                    )
+                                ifaces = copy.deepcopy(module_ifaces_list)
+                                vm_cfg["interfaces"] = ifaces
+                            if not isinstance(ifaces, list) or not ifaces:
+                                return out, warnings, f"inputs.vms[{vm_name}].interfaces must be a non-empty list"
+                            err = resolve_existing_ipam_addresses(str(vm_name), ifaces)
+                            if err:
+                                return out, warnings, err
+                            err = validate_explicit_ipam_addresses(str(vm_name), ifaces)
+                            if err:
+                                return out, warnings, err
+                    else:
+                        ifaces = out.get("interfaces")
+                        if not isinstance(ifaces, list) or not ifaces:
+                            return (
+                                out,
+                                warnings,
+                                "ipam requires inputs.interfaces (single-VM) or inputs.vms.<name>.interfaces "
+                                "so HybridOps can map bridge->subnet for allocation",
+                            )
+                        err = resolve_existing_ipam_addresses(str(out.get("vm_name") or "vm"), ifaces)
+                        if err:
+                            return out, warnings, err
+                        err = validate_explicit_ipam_addresses(str(out.get("vm_name") or "vm"), ifaces)
+                        if err:
+                            return out, warnings, err
                     return out, warnings, ""
 
                 try:

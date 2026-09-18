@@ -385,6 +385,18 @@ variable "windows_input_language" {
   default     = "en-US"
 }
 
+variable "cloudbase_init_enabled" {
+  type        = bool
+  description = "Install and configure Cloudbase-Init for Windows config-drive networking"
+  default     = false
+}
+
+variable "cloudbase_init_msi_url" {
+  type        = string
+  description = "Approved Cloudbase-Init installer URL"
+  default     = "https://www.cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi"
+}
+
 variable "driver_version" {
   type        = string
   description = "VirtIO driver version (e.g., 2k22, 2k19)"
