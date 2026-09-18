@@ -886,6 +886,18 @@ def set_vm_primary_ip4(client: NetBoxClient, *, vm_id: int, ip_id: int) -> None:
     _patch(client, path, {"primary_ip4": ip_id})
 
 
+def clear_vm_primary_ip4(client: NetBoxClient, *, vm_id: int) -> None:
+    """Remove a VM primary IPv4 assignment when its source is DHCP."""
+    path = f"/api/virtualization/virtual-machines/{vm_id}/"
+    _patch(client, path, {"primary_ip4": None})
+
+
+def unassign_ip_from_interface(client: NetBoxClient, *, ip_id: int) -> None:
+    """Detach an IP record from a VM interface without deleting the record."""
+    path = f"/api/ipam/ip-addresses/{ip_id}/"
+    _patch(client, path, {"assigned_object_type": None, "assigned_object_id": None})
+
+
 def list_vms_in_cluster(client: NetBoxClient, *, cluster_id: int) -> List[Dict[str, Any]]:
     path = "/api/virtualization/virtual-machines/"
     url = f"{client.base_url}{path}"

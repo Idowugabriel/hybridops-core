@@ -16,6 +16,7 @@ from .contract import DEFAULT_INTERFACE, DEFAULT_STATUS
 from .netbox_api import (
     NetBoxConfigError,
     assign_ip_to_interface,
+    clear_vm_primary_ip4,
     delete_vm,
     ensure_cluster,
     ensure_device_role,
@@ -34,6 +35,7 @@ from .netbox_api import (
     normalize_ip,
     probe_client,
     set_vm_primary_ip4,
+    unassign_ip_from_interface,
 )
 from .paths import vms_auto_csv_path, vms_auto_json_path
 
@@ -536,14 +538,17 @@ def main(argv: list[str] | None = None) -> int:
             stats["skipped_no_ip"] += 1
             continue
 
-        dhcp = ip_raw.lower() == "dhcp"
+        ip_assignment = (row.get("ip_assignment") or "").strip().lower()
+        # Exported rows may carry the observed DHCP lease in ip_address.
+        # The assignment mode is authoritative; the lease itself must not be
+        # imported as a static NetBox primary address.
+        dhcp = ip_raw.lower() == "dhcp" or ip_assignment == "dhcp"
         iface_name = (row.get("interface") or "").strip() or DEFAULT_INTERFACE
         vm_status = _normalize_vm_status((row.get("status") or "").strip())
 
         raw_tags = (row.get("tags") or "").strip()
         vm_tags: list[str] = [t.strip() for t in raw_tags.split(";") if t.strip()]
 
-        ip_assignment = (row.get("ip_assignment") or "").strip().lower()
         if ip_assignment in {"static", "dhcp"}:
             vm_tags.append(f"ip:{ip_assignment}")
 
@@ -581,6 +586,21 @@ def main(argv: list[str] | None = None) -> int:
             )
 
             if dhcp:
+                old_primary = vm.get("primary_ip4")
+                if isinstance(old_primary, dict):
+                    try:
+                        old_ip_id = int(old_primary.get("id"))
+                    except Exception:
+                        old_ip_id = 0
+                    if old_ip_id > 0:
+                        clear_vm_primary_ip4(client, vm_id=int(vm["id"]))
+                        try:
+                            unassign_ip_from_interface(client, ip_id=old_ip_id)
+                        except Exception:
+                            # Clearing the VM primary is the important safety
+                            # boundary; an old orphaned IP can be cleaned up
+                            # independently without failing inventory sync.
+                            pass
                 stats["processed"] += 1
                 stats["skipped_dhcp"] += 1
                 print(f"{name}: cluster={cluster_name} iface={iface_name} (DHCP; IP not managed in NetBox)")
