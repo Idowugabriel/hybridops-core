@@ -1997,7 +1997,10 @@ class ProxmoxVmContract(TerragruntModuleContract):
                         needs_alloc = True
                         if isinstance(ipv4, dict):
                             addr = str(ipv4.get("address") or "").strip().lower()
-                            if addr and addr != "dhcp":
+                            # An explicit DHCP interface is intentionally outside
+                            # NetBox allocation. An empty ipv4 mapping (or omitted
+                            # ipv4) remains the IPAM allocation signal.
+                            if addr == "dhcp" or addr:
                                 needs_alloc = False
                         elif ipv4 is None:
                             needs_alloc = True
