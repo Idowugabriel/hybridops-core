@@ -51,7 +51,7 @@ Files outside those boundaries and undeclared images are not archived.
 
 Before protected teardown, save device configurations and shut down QEMU guests
 cleanly, or configure a quiescence action with `hyops blueprint quiescence edit`.
-Leave IOL nodes running until native configuration export completes.
+Stopped IOL nodes can be captured from saved NVRAM.
 
     hyops blueprint destroy --env <env> --ref gcp/eve-ng@v1 \
       --execute --archive-before-destroy
