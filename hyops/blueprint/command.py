@@ -102,7 +102,7 @@ _QUIESCENCE_DRAFT_MARKER = "HYOPS_QUIESCENCE_ACTION_NOT_CONFIGURED"
 _QUIESCENCE_TEMPLATE = """#!/bin/sh
 set -eu
 
-# Shut down stateful guests and stop their EVE-NG nodes before returning.
+# Shut down QEMU guests and stop their EVE-NG nodes before returning.
 # Replace the line below with the actions required by this environment.
 echo 'HYOPS_QUIESCENCE_ACTION_NOT_CONFIGURED' >&2
 exit 64
@@ -5638,10 +5638,10 @@ def _confirm_guest_quiescence(ns, payload: dict[str, Any], paths) -> bool | None
             "EVE-NG node-state archive requires a configured guest-quiescence "
             "action. Configure it once with: "
             f"{_quiescence_edit_command(ns, payload)}. "
-            "Use --guest-quiesced only after a manual clean shutdown."
+            "Use --guest-quiesced only after a manual QEMU guest shutdown."
         )
     confirmed = _prompt_yes_no(
-        "Confirm stateful guests were shut down inside their operating systems "
+        "Confirm QEMU guests were shut down inside their operating systems "
         "[y/N]: "
     )
     if confirmed is True:
@@ -5692,7 +5692,7 @@ def _run_archive_before_destroy(ns, payload: dict[str, Any], paths) -> int:
             f"{qualifier}guest quiescence action"
         )
     else:
-        print("preparing saved lab state; guests must already be shut down")
+        print("preparing saved lab state; QEMU guests must already be shut down")
     print("this may take several minutes, depending on lab size")
     progress = ProgressDisplay(
         enabled=bool(
