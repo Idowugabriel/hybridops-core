@@ -40,6 +40,9 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Fixed
 
+- Made `hyops update install` exit with a clear error and `--yes` guidance
+  when confirmation input reaches EOF, without starting the installer or
+  printing a Python traceback.
 - Opened local blueprint URLs in the Windows browser through the existing WSL
   browser bridge.
 - Preserved and restored inspected Containerlab native lab-directory state so

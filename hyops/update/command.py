@@ -70,7 +70,15 @@ def run_install(ns: argparse.Namespace) -> int:
         print("ERR: the release download location is unavailable.", file=sys.stderr)
         return 2
     if not ns.yes:
-        answer = input(f"Install HybridOps.Core {status.latest}? [y/N]: ").strip().lower()
+        try:
+            answer = input(f"Install HybridOps.Core {status.latest}? [y/N]: ").strip().lower()
+        except EOFError:
+            print(
+                "ERR: update confirmation input is unavailable; "
+                "use --yes to install without confirmation.",
+                file=sys.stderr,
+            )
+            return 2
         if answer not in {"y", "yes"}:
             print("Update cancelled.")
             return 2
