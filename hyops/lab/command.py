@@ -257,7 +257,7 @@ def _add_archive_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--node-state",
         default="",
-        help="Optional EVE-NG QEMU node-state companion archive.",
+        help="Optional EVE-NG node-state companion archive.",
     )
     parser.add_argument(
         "--images",
@@ -344,7 +344,7 @@ def add_lab_subparser(sp: argparse._SubParsersAction) -> None:
     capture_parser.add_argument(
         "--include-node-state",
         action="store_true",
-        help="Capture stopped EVE-NG QEMU overlays.",
+        help="Capture stopped EVE-NG QEMU overlays and IOL state.",
     )
     quiescence = capture_parser.add_mutually_exclusive_group()
     quiescence.add_argument(
@@ -368,7 +368,7 @@ def add_lab_subparser(sp: argparse._SubParsersAction) -> None:
         type=int,
         default=300,
         metavar="SECONDS",
-        help="Maximum time for EVE-NG guest quiescence and QEMU shutdown.",
+        help="Maximum time for EVE-NG guest quiescence and node shutdown.",
     )
     capture_parser.add_argument(
         "--node-state-output",

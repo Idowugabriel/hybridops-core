@@ -927,7 +927,7 @@ class ResumableBlueprintDestroyTest(TestCase):
                 rc = _run_archive_before_destroy(_namespace(), payload, paths)
 
         self.assertEqual(rc, 0)
-        self.assertIn("node state: no QEMU overlays found", stdout.getvalue())
+        self.assertIn("node state: no stopped node state found", stdout.getvalue())
 
     def test_archive_execution_injects_guest_quiescence(self):
         payload = {

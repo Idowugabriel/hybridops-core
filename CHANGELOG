@@ -6,6 +6,8 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Added
 
+- Added stopped EVE-NG IOL NVRAM and VLAN database state to migration
+  assessment, capture and restore validation alongside QEMU overlays.
 - Added a local Ubuntu and WSL2 Containerlab blueprint with direct device
   automation material and a pinned browser interface.
 - Added local Linux execution support for Containerlab modules without an SSH
@@ -27,6 +29,10 @@ This changelog records significant operator-facing capabilities, lifecycle chang
 
 ### Changed
 
+- Required stopped-IOL evidence when an EVE-NG migration bundle contains IOL
+  state while retaining compatibility with QEMU-only bundles.
+- Pinned `hybridops.helper` to `0.1.11` for verified IOL configuration and
+  stopped-node-state continuity across EVE-NG reconstruction.
 - Pinned `hybridops.app` to `0.1.13` for secret-safe additional EVE-NG user
   handling and the managed Containerlab image, GUI and recovery lifecycle.
 - Made the authoritative-foundation blueprint use the logical
