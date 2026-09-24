@@ -129,6 +129,8 @@ fi
 
 bash -n "${HYOPS_REPO_ROOT}/pkg/build_macos_pkg.sh"
 bash -n "${HYOPS_REPO_ROOT}/pkg/build_release.sh"
+bash -n "${HYOPS_REPO_ROOT}/pkg/verify_release.sh"
+bash "${HYOPS_REPO_ROOT}/tools/ci/check-release-manifest.sh"
 bash -n "${HYOPS_REPO_ROOT}/pkg/macos/app/HybridOps.Core"
 bash -n "${HYOPS_REPO_ROOT}/pkg/macos/macos-shell.command"
 bash -n "${HYOPS_REPO_ROOT}/pkg/macos/preinstall"

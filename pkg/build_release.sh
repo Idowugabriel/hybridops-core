@@ -93,8 +93,9 @@ copy_manifest_paths() {
   while IFS= read -r relpath; do
     [[ -n "${relpath}" ]] || continue
     if ! source_relpath="$(hyops_release_resolve_include_path "${relpath}")"; then
-      echo "WARN: manifest path missing, skipping: ${relpath}" >&2
-      continue
+      echo "ERR: manifest include entry is not in the source tree: ${relpath}" >&2
+      echo "hint: update pkg/manifest.yml when this packaging change is intentional" >&2
+      exit 3
     fi
     mkdir -p "$(dirname "${STAGE_ROOT}/${relpath%/}")"
     cp -a "${REPO_ROOT}/${source_relpath}" "${STAGE_ROOT}/${relpath}"

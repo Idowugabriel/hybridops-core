@@ -30,7 +30,7 @@ _hyops_release_pkg_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${_hyops_release_pkg_dir}/lib/common.sh"
 
 hyops_release_require_cmd tar
-hyops_release_require_cmd sha256sum
+hyops_release_require_cmd python3
 hyops_release_require_cmd find
 hyops_release_require_cmd mktemp
 
@@ -99,10 +99,7 @@ if find "${RELEASE_ROOT}" -path "*/${VENDORED_COLLECTIONS_REL}" -print -quit | g
   exit 3
 fi
 
-(
-  cd "${RELEASE_ROOT}"
-  sha256sum -c pkg/release-files.sha256 >/dev/null
-)
+hyops_release_verify_checksum_manifest "${RELEASE_ROOT}" "extracted bundle"
 
 install_env=(HOME="${HOME_DIR}" PATH="/usr/bin:/bin:${PATH}")
 if [[ "${HYOPS_RELEASE_VERIFY_USE_SYSTEM_DEPS:-false}" == "true" ]]; then
@@ -159,10 +156,7 @@ env "${install_env[@]}" \
   env -u PYTHONPATH HOME="${HOME_DIR}" "${INSTALLED_HYOPS}" show --help >/dev/null
 )
 
-(
-  cd "${INSTALLED_APP}"
-  sha256sum -c pkg/release-files.sha256 >/dev/null
-)
+hyops_release_verify_checksum_manifest "${INSTALLED_APP}" "installed payload"
 if find "${INSTALLED_APP}" -path "*/${VENDORED_COLLECTIONS_REL}" -print -quit | grep -q .; then
   echo "ERR: installed bundle still includes vendored HybridOps collections" >&2
   exit 3

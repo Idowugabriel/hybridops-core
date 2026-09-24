@@ -134,17 +134,21 @@ TMPDIR=/dev/shm ./pkg/verify_release.sh dist/releases/hybridops-core-<label>.tar
 `pkg/verify_release.sh` validates:
 
 - the bundle extracts cleanly
-- the shipped checksum manifest matches the extracted payload
+- the shipped checksum manifest matches the extracted payload, and a mismatch names the missing file, unexpected file, or checksum entry
 - `install.sh` can install the bundle into an isolated runtime root
 - installed `hyops` runs without relying on the source checkout
 - the installed runtime resolves its shipped packs without wrapper environment variables
 - the bundle and installed payload do not include vendored runtime dependency source
 - installed `hyops` exposes the required setup paths
-- the installed payload matches the shipped checksum manifest
+- the installed payload matches the shipped checksum manifest, with the same file-level mismatch detail
 - the temporary filesystem has enough free space before extraction begins
 
 This is the authoritative release gate for HybridOps.Core. It keeps source,
 bundle, and installed runtime aligned before a public release.
+
+When a packaging change is intentional, update the `include` list in
+`pkg/manifest.yml` and rebuild the bundle. Verification names each missing
+file, unexpected file, and checksum mismatch.
 
 `build_release.sh` also warns when the temporary filesystem looks tight for the
 current source payload, with a `TMPDIR` hint instead of failing late and
