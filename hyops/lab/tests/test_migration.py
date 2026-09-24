@@ -362,7 +362,8 @@ class LabMigrationInspectionTest(TestCase):
         self.assertTrue(report["images_included"])
         self.assertEqual(report["images"]["image_count"], 1)
         self.assertEqual(
-            report["warnings"], ["writable QEMU node state is not included"]
+            report["warnings"],
+            ["writable QEMU or IOL node state is not included"],
         )
 
     def test_rejects_incomplete_eve_image_companion(self) -> None:

@@ -1122,7 +1122,7 @@ def inspect_migration_archive(
         else:
             warnings.append("referenced base images must be available on the target")
     if platform_name == "eve-ng" and node_report is None:
-        warnings.append("writable QEMU node state is not included")
+        warnings.append("writable QEMU or IOL node state is not included")
     elif (
         platform_name == "eve-ng"
         and isinstance(node_report, dict)
