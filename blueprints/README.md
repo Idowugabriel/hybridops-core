@@ -214,11 +214,11 @@ password. Capture assesses all requested streams before transferring data.
 Before EVE-NG node-state capture, shut down each stateful guest inside its
 operating system and pass `--guest-quiesced`. Stopping a node in EVE-NG does
 not establish a clean guest shutdown. Capture also refuses to proceed while
-EVE-NG QEMU nodes or the GNS3 server are running. For a repeatable action,
-replace `--guest-quiesced` with `--quiesce-script ./quiesce-lab.sh`. The script
-runs on the EVE-NG host; Core verifies that QEMU has stopped and records the
-script checksum. Use `--become` when the SSH account has passwordless sudo
-access.
+EVE-NG QEMU or IOL nodes, or the GNS3 server, are running. For repeatable
+capture, use `--quiesce-script ./quiesce-lab.sh` instead of
+`--guest-quiesced`. The script runs on the EVE-NG host; Core verifies that
+stateful nodes have stopped and records the script checksum. Use `--become`
+when the SSH account has passwordless sudo access.
 
 For EVE-NG, `--include-images` creates a separate archive containing only the
 base images referenced by the captured labs. For GNS3, it includes the image
@@ -304,10 +304,11 @@ hyops blueprint deploy \
 ```
 
 The EVE-NG primary archive must be relative to `/opt/unetlab/labs`. Its
-optional node-state companion contains stopped QEMU overlays using the EVE-NG
-tenant, lab and node path layout. Its optional image companion contains only
-referenced QEMU, IOL or Dynamips bases. Licence material is never included. A
-GNS3 archive must be relative to its data root and contain `projects/` state.
+optional node-state companion contains stopped QEMU overlays, IOL NVRAM and
+VLAN database files using the EVE-NG tenant, lab and node path layout. The
+image companion contains only referenced QEMU, IOL or Dynamips bases. Licence
+material is never included. A GNS3 archive must be relative to its data root
+and contain `projects/` state.
 Use the matching checksum options when checksums were recorded at the source.
 Capture and import retain 64 MiB free on the controller filesystem. Restore
 checks the target filesystem and stages image content before promotion.

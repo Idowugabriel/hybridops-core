@@ -29,8 +29,15 @@ _MAX_MEMBERS = 200_000
 _FREE_SPACE_RESERVE_BYTES = 64 * 1024 * 1024
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _EVE_NODE_STATE_RE = re.compile(r"^[0-9]+/[^/]+/[0-9]+/[^/]+\.qcow2$")
+_EVE_IOL_STATE_RE = re.compile(
+    r"^[0-9]+/[^/]+/[0-9]+/(?:nvram_[0-9]+|vlan\.dat-[0-9]+)$"
+)
 _EVE_NODE_STATE_METADATA = "hybridops/capture.json"
 _EVE_NODE_STATE_METADATA_SCHEMA = "hybridops.eve-node-state-capture/v1"
+_EVE_NODE_STATE_INVENTORY = r"""find . -mindepth 4 -maxdepth 4 -type f \
+  \( -name '*.qcow2' -o -name 'nvram_*' -o -name 'vlan.dat-*' \) \
+  -printf '%P\t%b\n' | awk -F '\t' \
+  '$1 ~ /^[0-9]+\/[^/]+\/[0-9]+\/([^/]+\.qcow2|nvram_[0-9]+|vlan\.dat-[0-9]+)$/ { print }'"""
 _SSH_HOST_RE = re.compile(r"^[a-zA-Z0-9_.:-]+$")
 _SSH_USER_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 _EVE_IMAGE_CAPTURE_PROGRAM = r"""
@@ -849,18 +856,20 @@ def _inspect_eve_node_state(path: Path) -> dict[str, Any]:
             if not files:
                 raise ValueError("EVE-NG node-state archive contains no files")
             overlays = [name for name in files if _EVE_NODE_STATE_RE.fullmatch(name)]
+            iol_state = [name for name in files if _EVE_IOL_STATE_RE.fullmatch(name)]
             invalid = [
                 name
                 for name in files
                 if name != _EVE_NODE_STATE_METADATA
                 and not _EVE_NODE_STATE_RE.fullmatch(name)
+                and not _EVE_IOL_STATE_RE.fullmatch(name)
             ]
             if invalid:
                 raise ValueError(
                     f"EVE-NG node-state member has an invalid path: {invalid[0]}"
                 )
-            if not overlays:
-                raise ValueError("EVE-NG node-state archive contains no overlays")
+            if not overlays and not iol_state:
+                raise ValueError("EVE-NG node-state archive contains no node state")
 
             report: dict[str, Any] = {
                 "expanded_size_bytes": sum(
@@ -868,6 +877,7 @@ def _inspect_eve_node_state(path: Path) -> dict[str, Any]:
                 ),
                 "member_count": len(members),
                 "overlay_count": len(overlays),
+                "iol_state_count": len(iol_state),
                 "capture_consistency": "unrecorded",
             }
             metadata_member = next(
@@ -879,6 +889,10 @@ def _inspect_eve_node_state(path: Path) -> dict[str, Any]:
                 None,
             )
             if metadata_member is None:
+                if iol_state:
+                    raise ValueError(
+                        "EVE-NG IOL node state lacks quiescence evidence"
+                    )
                 return report
             try:
                 metadata = json.loads(_read_definition(handle, metadata_member))
@@ -906,6 +920,10 @@ def _inspect_eve_node_state(path: Path) -> dict[str, Any]:
                 raise ValueError(
                     "EVE-NG node-state capture metadata does not verify stopped QEMU processes"
                 )
+            if iol_state and quiescence.get("iol_processes_absent") is not True:
+                raise ValueError(
+                    "EVE-NG node-state capture metadata does not verify stopped IOL processes"
+                )
             verified_at = str(quiescence.get("verified_at") or "").strip()
             script_sha256 = str(quiescence.get("script_sha256") or "").strip()
             if method == "operator-script" and not _SHA256_RE.fullmatch(
@@ -922,6 +940,7 @@ def _inspect_eve_node_state(path: Path) -> dict[str, Any]:
             report["quiescence"] = {
                 "method": method,
                 "qemu_processes_absent": True,
+                "iol_processes_absent": quiescence.get("iol_processes_absent") is True,
                 "verified_at": verified_at or None,
                 "script_sha256": script_sha256 or None,
             }
@@ -1103,7 +1122,7 @@ def inspect_migration_archive(
         else:
             warnings.append("referenced base images must be available on the target")
     if platform_name == "eve-ng" and node_report is None:
-        warnings.append("writable QEMU node state is not included")
+        warnings.append("writable QEMU or IOL node state is not included")
     elif (
         platform_name == "eve-ng"
         and isinstance(node_report, dict)
@@ -1229,21 +1248,23 @@ if pgrep -af '[/]opt/qemu[^ ]*/bin/qemu-system-' >/dev/null; then
   echo 'EVE-NG QEMU nodes are running; shut down stateful guests inside the guest and stop the remaining nodes before capture' >&2
   exit 21
 fi
+if pgrep -af '[/]opt/unetlab/addons/iol/bin/' >/dev/null; then
+  echo 'EVE-NG IOL nodes are running; save their configurations and stop them before capture' >&2
+  exit 21
+fi
 cd "$root"
-find . -mindepth 4 -maxdepth 4 -type f -name '*.qcow2' \
-  -printf '%P\\n' -quit | grep -q . || {{
-  echo 'No EVE-NG QEMU node state was found' >&2
+inventory=$({_EVE_NODE_STATE_INVENTORY})
+test -n "$inventory" || {{
+  echo 'No EVE-NG node state was found' >&2
   exit 22
 }}
-required=$(find . -mindepth 4 -maxdepth 4 -type f -name '*.qcow2' \
-  -printf '%b\\n' | awk '{{total += $1}} END {{printf "%.0f\\n", total * 512}}')
+required=$(printf '%s\\n' "$inventory" | awk -F '\\t' '{{total += $2}} END {{printf "%.0f\\n", total * 512}}')
 {capacity_check}{compressor}
 metadata_dir=$(mktemp -d)
 trap 'find "$metadata_dir" -depth -delete' EXIT
 mkdir -p "$metadata_dir/hybridops"
 printf '%s\\n' {shlex.quote(metadata)} > "$metadata_dir/{_EVE_NODE_STATE_METADATA}"
-find . -mindepth 4 -maxdepth 4 -type f -name '*.qcow2' \
-  -printf '%P\\n' | sort > "$metadata_dir/members.txt"
+printf '%s\\n' "$inventory" | cut -f1 | sort > "$metadata_dir/members.txt"
 tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
   --sparse -I "$compressor" -cf - -C "$root" -T "$metadata_dir/members.txt" \
   -C "$metadata_dir" {_EVE_NODE_STATE_METADATA}
@@ -1253,6 +1274,10 @@ root=/opt/unetlab/labs
 test -d "$root" || {{ echo 'EVE-NG labs root not found' >&2; exit 20; }}
 if pgrep -af '[/]opt/qemu[^ ]*/bin/qemu-system-' >/dev/null; then
   echo 'EVE-NG QEMU nodes are running; stop them before capture' >&2
+  exit 21
+fi
+if pgrep -af '[/]opt/unetlab/addons/iol/bin/' >/dev/null; then
+  echo 'EVE-NG IOL nodes are running; stop them before capture' >&2
   exit 21
 fi
 find "$root" -type f -name '*.unl' -print -quit | grep -q . || {{
@@ -1325,20 +1350,23 @@ printf 'primary_bytes=%s\nnode_state_bytes=0\nimage_bytes=0\n' "$primary_bytes"
             )
             image_assessment = f"image_bytes=$({image_command})"
         if include_node_state:
-            node_state_assessment = """node_root=/opt/unetlab/tmp
-test -d "$node_root" || { echo 'EVE-NG node-state root not found' >&2; exit 20; }
+            node_state_assessment = f"""node_root=/opt/unetlab/tmp
+test -d "$node_root" || {{ echo 'EVE-NG node-state root not found' >&2; exit 20; }}
 cd "$node_root"
-find . -mindepth 4 -maxdepth 4 -type f -name '*.qcow2' \
-  -printf '%P\\n' -quit | grep -q . || {
-  echo 'No EVE-NG QEMU node state was found' >&2
+inventory=$({_EVE_NODE_STATE_INVENTORY})
+test -n "$inventory" || {{
+  echo 'No EVE-NG node state was found' >&2
   exit 22
-}
-node_state_bytes=$(find . -mindepth 4 -maxdepth 4 -type f -name '*.qcow2' \
-  -printf '%b\\n' | awk '{total += $1} END {printf "%.0f\\n", total * 512}')"""
+}}
+node_state_bytes=$(printf '%s\\n' "$inventory" | awk -F '\\t' '{{total += $2}} END {{printf "%.0f\\n", total * 512}}')"""
         running_node_check = ""
         if not allow_running_eve_nodes:
             running_node_check = """if pgrep -af '[/]opt/qemu[^ ]*/bin/qemu-system-' >/dev/null; then
   echo 'EVE-NG QEMU nodes are running; stop them before capture' >&2
+  exit 21
+fi
+if pgrep -af '[/]opt/unetlab/addons/iol/bin/' >/dev/null; then
+  echo 'EVE-NG IOL nodes are running; stop them before capture' >&2
   exit 21
 fi
 """
@@ -1519,9 +1547,10 @@ def _run_quiescence_script(
     remaining_s = max(1, int(timeout_s - (time.monotonic() - started_at)))
     wait_script = f"""set -eu
 deadline=$(( $(date +%s) + {remaining_s} ))
-while pgrep -f '[/]opt/qemu[^ ]*/bin/qemu-system-' >/dev/null; do
+while pgrep -f '[/]opt/qemu[^ ]*/bin/qemu-system-' >/dev/null \
+  || pgrep -f '[/]opt/unetlab/addons/iol/bin/' >/dev/null; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo 'Timed out waiting for EVE-NG QEMU guests to stop' >&2
+    echo 'Timed out waiting for EVE-NG stateful nodes to stop' >&2
     exit 21
   fi
   sleep 2
@@ -1553,12 +1582,13 @@ done
             )
         if result.returncode == 21:
             raise ValueError(
-                "quiescence timed out while EVE-NG QEMU guests were still running"
+                "quiescence timed out while EVE-NG stateful nodes were still running"
             )
         raise _capture_error(result)
     evidence = {
         "method": "operator-script",
         "qemu_processes_absent": True,
+        "iol_processes_absent": True,
         "verified_at": _utc_now(),
         "script_sha256": script_sha256,
     }
@@ -1940,6 +1970,7 @@ def capture_existing_lab(
             quiescence_evidence = {
                 "method": "operator-attestation",
                 "qemu_processes_absent": True,
+                "iol_processes_absent": True,
                 "verified_at": _utc_now(),
                 "script_sha256": None,
             }

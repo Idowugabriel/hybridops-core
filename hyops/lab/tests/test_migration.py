@@ -16,6 +16,7 @@ from unittest.mock import patch
 from hyops.lab.migration import (
     _CONTAINERLAB_CAPTURE_PROGRAM,
     _EVE_IMAGE_CAPTURE_PROGRAM,
+    _EVE_NODE_STATE_INVENTORY,
     _capture_requirements,
     _capture_stream,
     _format_bytes,
@@ -123,6 +124,63 @@ def _write_containerlab_archive(path: Path, topology: bytes | None = None) -> No
 
 
 class LabMigrationInspectionTest(TestCase):
+    def test_rejects_iol_state_without_stopped_process_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "eve.tar.gz"
+            node_state = Path(tmp) / "nodes.tar.gz"
+            _write_tar(archive, {"0/network.unl": b"<lab />"})
+            _write_tar(
+                node_state,
+                {
+                    "0/network/1/nvram_00016": b"nvram",
+                    "hybridops/capture.json": json.dumps(
+                        {
+                            "schema": "hybridops.eve-node-state-capture/v1",
+                            "quiescence": {
+                                "method": "operator-attestation",
+                                "qemu_processes_absent": True,
+                            },
+                        }
+                    ).encode(),
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "stopped IOL processes"):
+                inspect_migration_archive(
+                    platform="eve-ng", archive=archive, node_state=node_state
+                )
+
+    def test_inspects_iol_only_node_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            archive = Path(tmp) / "eve.tar.gz"
+            node_state = Path(tmp) / "nodes.tar.gz"
+            _write_tar(archive, {"0/network.unl": b"<lab />"})
+            _write_tar(
+                node_state,
+                {
+                    "0/network/1/nvram_00016": b"nvram",
+                    "0/network/1/vlan.dat-00016": b"vlans",
+                    "hybridops/capture.json": json.dumps(
+                        {
+                            "schema": "hybridops.eve-node-state-capture/v1",
+                            "quiescence": {
+                                "method": "operator-attestation",
+                                "qemu_processes_absent": True,
+                                "iol_processes_absent": True,
+                            },
+                        }
+                    ).encode(),
+                },
+            )
+
+            report = inspect_migration_archive(
+                platform="eve-ng", archive=archive, node_state=node_state
+            )
+
+        self.assertEqual(report["node_state"]["overlay_count"], 0)
+        self.assertEqual(report["node_state"]["iol_state_count"], 2)
+        self.assertEqual(report["node_state"]["capture_consistency"], "guest-quiesced")
+
     def test_inspects_eve_archive_and_node_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             archive = Path(tmp) / "eve.tar.gz"
@@ -304,7 +362,8 @@ class LabMigrationInspectionTest(TestCase):
         self.assertTrue(report["images_included"])
         self.assertEqual(report["images"]["image_count"], 1)
         self.assertEqual(
-            report["warnings"], ["writable QEMU node state is not included"]
+            report["warnings"],
+            ["writable QEMU or IOL node state is not included"],
         )
 
     def test_rejects_incomplete_eve_image_companion(self) -> None:
@@ -827,7 +886,7 @@ class LabMigrationStagingTest(TestCase):
 
 
 class LabMigrationCaptureTest(TestCase):
-    def test_eve_node_state_capture_selects_only_runtime_overlays(self) -> None:
+    def test_eve_node_state_capture_selects_durable_runtime_files(self) -> None:
         assessment = _remote_capture_assessment_script(
             "eve-ng",
             include_node_state=True,
@@ -839,14 +898,43 @@ class LabMigrationCaptureTest(TestCase):
             node_state_evidence={
                 "method": "operator-attestation",
                 "qemu_processes_absent": True,
+                "iol_processes_absent": True,
                 "verified_at": "2026-09-01T00:00:00Z",
                 "script_sha256": None,
             },
         )
 
-        selector = "-mindepth 4 -maxdepth 4 -type f -name '*.qcow2'"
-        self.assertEqual(assessment.count(selector), 2)
-        self.assertEqual(capture.count(selector), 3)
+        self.assertIn("vlan.dat-*", assessment)
+        self.assertIn("nvram_*", capture)
+        self.assertIn("iol_processes_absent", capture)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in (
+                "0/network/1/virtioa.qcow2",
+                "0/network/1/nvram_00016",
+                "0/network/1/vlan.dat-00016",
+                "0/network/1/wrapper.txt",
+                "0/network/1/opt/unetlab/addons/qemu/base.qcow2",
+            ):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"state")
+            result = subprocess.run(
+                ["sh", "-c", _EVE_NODE_STATE_INVENTORY],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        names = {line.split("\t", 1)[0] for line in result.stdout.splitlines()}
+        self.assertEqual(
+            names,
+            {
+                "0/network/1/virtioa.qcow2",
+                "0/network/1/nvram_00016",
+                "0/network/1/vlan.dat-00016",
+            },
+        )
 
     def test_scripted_capture_assesses_source_before_stopping_qemu(self) -> None:
         script = _remote_capture_assessment_script(
